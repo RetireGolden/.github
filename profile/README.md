@@ -16,14 +16,6 @@ Privacy-first retirement planning that runs entirely in your browser as a PWA. M
 ### [RetireGolden-MCP](https://github.com/RetireGolden/RetireGolden-MCP) — the AI connector
 A headless [Model Context Protocol](https://modelcontextprotocol.io) server for the [`@retiregolden/engine`](https://www.npmjs.com/package/@retiregolden/engine) calculator. Connect Claude Desktop, Claude Code, Cursor, or any MCP client and call typed tools for plan building, projections, Monte Carlo, and optimization — all in memory, read-only with respect to your finances. Try it with `npx @retiregolden/mcp`.
 
-### [EntitleKit](https://github.com/RetireGolden/entitlekit) — authorization boundary
-Provider-neutral roles, entitlements, and permissions for SaaS applications. Auth providers answer *who someone is*; billing providers report *what they purchased*; EntitleKit is the small, trustworthy boundary that combines those facts and decides *what a person may do*. MIT licensed, early `0.x` development.
-
-### [Support Desk](https://github.com/RetireGolden/support-desk) — support queue
-A composable, open-source support queue for web and email: authenticated ticketing, a central staff queue, threaded web and email replies, with provider-neutral identity, mail, and storage boundaries. MIT licensed, early `0.x` development.
-
----
-
 ## 📦 On npm
 
 | Package | What it is |
@@ -35,7 +27,7 @@ A composable, open-source support queue for web and email: authenticated ticketi
 
 ## 🤝 Contributing
 
-Issues, discussions, and pull requests are welcome on any of our public repositories. Each repo carries its own contributing guidelines and license — the planner and engine are AGPL-3.0-only, while our infrastructure libraries are MIT.
+Issues, discussions, and pull requests are welcome on any of our public repositories. Each repo carries its own contributing guidelines and license — the planner and engine are AGPL-3.0-only.
 
 ## ⚖️ Disclaimer
 
