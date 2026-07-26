@@ -11,6 +11,8 @@ We believe everyone should be able to plan their retirement without handing thei
 ## 🧭 Our open-source projects
 
 ### [RetireGolden](https://github.com/RetireGolden/RetireGolden) — the planner
+**Use it now at [retiregolden.app](https://retiregolden.app)** — nothing to install, nothing to sign up for.
+
 Privacy-first retirement planning that runs entirely in your browser as a PWA. Monte Carlo simulation, Social Security modeling, and tax-aware planning — with no accounts, no server, and no data leaving your device. TypeScript + React. Licensed AGPL-3.0-only.
 
 ### [RetireGolden-MCP](https://github.com/RetireGolden/RetireGolden-MCP) — the AI connector
