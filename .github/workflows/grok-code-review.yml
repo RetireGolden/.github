@@ -1,0 +1,63 @@
+# Organization-required Grok Build PR review.
+# Enforced via org ruleset "Require Grok code review" pointing at this file.
+# Secret: org-level GROK_AUTH_JSON (contents of ~/.grok/auth.json after `grok login`).
+name: Grok code review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # Optional manual re-run from the Actions tab on a PR's head repo
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: grok-code-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Grok Build review
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && !github.event.pull_request.draft)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Run Grok Build review
+        id: grok
+        uses: 0xr3ngar/grok-build-review-action@331c5b469a19e33d1eda69a0c06efc7d128b625a # v1.0.1
+        with:
+          grok_auth_json: ${{ secrets.GROK_AUTH_JSON }}
+          github_token: ${{ github.token }}
+          pr_number: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          roast_level: professional
+          fail_on: never
+          status_comments: "true"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Grok code review"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Verdict | \`${{ steps.grok.outputs.verdict }}\` |"
+            echo "| Issues | \`${{ steps.grok.outputs.issue_count }}\` |"
+            echo "| Bugs | \`${{ steps.grok.outputs.bug_count }}\` |"
+            echo "| Review | ${{ steps.grok.outputs.review_url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
