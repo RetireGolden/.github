@@ -63,7 +63,7 @@ jobs:
               echo "effort=high" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
-                echo "Focus on tax/rules correctness, engine vs UI money-math leaks, missing tests for new calculations, CLA/commit identity, and no private planning in the public tree. Obey AGENTS.md."
+                echo "On a calculation/logic diff, flag it if there is no unit test, or if the test only mirrors the new code with no citable source (statute subparagraph + what it requires, IRS pub, or DOCS/domain). A green test that only mirrors the new code does not count. Fixtures must discriminate between plausible statutory readings. Keep engine vs UI money-math leaks, CLA/commit identity, and no private planning. Still obey AGENTS.md."
                 echo "EOF"
               } >> "$GITHUB_OUTPUT"
               ;;
