@@ -45,7 +45,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Prefer XAI_API_KEY over auth.json
-        if: ${{ secrets.XAI_API_KEY != '' }}
+        if: env.XAI_API_KEY != ''
         run: |
           mkdir -p ~/.grok
           cat > ~/.grok/config.toml <<'EOF'
