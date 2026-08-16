@@ -1,9 +1,8 @@
 # Organization-required Grok Build PR review.
 # Enforced via org ruleset "Require Grok code review" pointing at this file.
 # Secrets:
-#   GROK_AUTH_JSON — ~/.grok/auth.json after `grok login` (required by the action).
-#   XAI_API_KEY — optional; when set, ~/.grok/config.toml points grok-build at this
-#     env var and the CLI prefers it over auth.json.
+#   XAI_API_KEY — required. ~/.grok/config.toml points grok-4.6 at
+#     https://api.x.ai/v1 and this env var. SuperGrok session auth is not used.
 name: Grok code review
 
 on:
@@ -38,22 +37,30 @@ jobs:
     env:
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
     steps:
+      - name: Require XAI_API_KEY
+        if: env.XAI_API_KEY == ''
+        run: |
+          echo "::error::XAI_API_KEY is empty. This workflow uses only the org API key against api.x.ai; SuperGrok is not a fallback."
+          exit 1
+
       - name: Checkout PR head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Prefer XAI_API_KEY over auth.json
+      - name: Point grok-4.6 at api.x.ai
         if: env.XAI_API_KEY != ''
         run: |
           mkdir -p ~/.grok
-          cat > ~/.grok/config.toml <<'EOF'
-          [model.grok-build]
-          env_key = "XAI_API_KEY"
-          [models]
-          default = "grok-build"
-          EOF
+          printf '%s\n' \
+            '[model."grok-4.6"]' \
+            'model = "grok-4.6"' \
+            'base_url = "https://api.x.ai/v1"' \
+            'env_key = "XAI_API_KEY"' \
+            '[models]' \
+            'default = "grok-4.6"' \
+            > ~/.grok/config.toml
 
       - name: Set per-repo review policy
         id: policy
@@ -63,7 +70,7 @@ jobs:
               echo "effort=high" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
-                echo "Focus on tax/rules correctness, engine vs UI money-math leaks, missing tests for new calculations, CLA/commit identity, and no private planning in the public tree. Obey AGENTS.md."
+                echo "On a calculation/logic diff, flag it if there is no unit test, or if the test only mirrors the new code with no citable source (statute subparagraph + what it requires, IRS pub, or DOCS/domain). A green test that only mirrors the new code does not count. Fixtures must discriminate between plausible statutory readings. Keep engine vs UI money-math leaks, CLA/commit identity, and no private planning. Still obey AGENTS.md."
                 echo "EOF"
               } >> "$GITHUB_OUTPUT"
               ;;
@@ -85,9 +92,12 @@ jobs:
         id: grok
         uses: 0xr3ngar/grok-build-review-action@eded30018cdee4e83dfca14d18f292b860c30cdd # v1.0.2
         with:
-          grok_auth_json: ${{ secrets.GROK_AUTH_JSON }}
+          # Official action still requires this input and writes ~/.grok/auth.json.
+          # Dummy JSON only; real auth is XAI_API_KEY + config.toml (api.x.ai).
+          grok_auth_json: "{}"
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          model: grok-4.6
           effort: ${{ steps.policy.outputs.effort }}
           custom_instructions: ${{ steps.policy.outputs.custom_instructions }}
           roast_level: professional
