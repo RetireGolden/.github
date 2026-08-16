@@ -1,7 +1,7 @@
 # Organization-required Grok Build PR review.
 # Enforced via org ruleset "Require Grok code review" pointing at this file.
 # Secrets:
-#   XAI_API_KEY — required. ~/.grok/config.toml points grok-build at
+#   XAI_API_KEY — required. ~/.grok/config.toml points grok-4.6 at
 #     https://api.x.ai/v1 and this env var. SuperGrok session auth is not used.
 name: Grok code review
 
@@ -49,17 +49,17 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Point grok-build at api.x.ai
+      - name: Point grok-4.6 at api.x.ai
         if: env.XAI_API_KEY != ''
         run: |
           mkdir -p ~/.grok
           printf '%s\n' \
-            '[model.grok-build]' \
-            'model = "grok-build"' \
+            '[model.grok-4.6]' \
+            'model = "grok-4.6"' \
             'base_url = "https://api.x.ai/v1"' \
             'env_key = "XAI_API_KEY"' \
             '[models]' \
-            'default = "grok-build"' \
+            'default = "grok-4.6"' \
             > ~/.grok/config.toml
 
       - name: Set per-repo review policy
@@ -97,6 +97,7 @@ jobs:
           grok_auth_json: "{}"
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          model: grok-4.6
           effort: ${{ steps.policy.outputs.effort }}
           custom_instructions: ${{ steps.policy.outputs.custom_instructions }}
           roast_level: professional
