@@ -1,8 +1,35 @@
-# Organization-required Grok Build PR review.
-# Enforced via org ruleset "Require Grok code review" pointing at this file.
+# Reusable Grok Build PR review for RetireGolden.
+#
+# Target repos invoke this file via a thin caller, for example:
+#
+#   jobs:
+#     grok:
+#       uses: RetireGolden/.github/.github/workflows/grok-code-review.yml@main
+#       secrets: inherit
+#       permissions:
+#         contents: read
+#         pull-requests: write
+#
+# Callers should `secrets: inherit` so the existing org XAI_API_KEY is
+# available here. Do not invent a new secret. workflow_call declares
+# XAI_API_KEY as optional so inherit and an explicit same-name mapping
+# both work; required: true would fail the call site instead of this
+# job's fail-closed check. Inherited secrets are also readable when
+# undeclared; declaring the name documents the contract.
+#
+# github.event_name inside a called workflow is the caller's event
+# (usually pull_request), not workflow_call. Read PR number from the
+# caller event first; use inputs.pr_number for dispatch/call. Do not
+# use github.event.inputs for workflow_call (that context is empty).
+#
+# The job-level if still refuses NO SCAN repos even if a ruleset or
+# caller would otherwise fire. This repo (RetireGolden/.github) is
+# NO SCAN — do not add a caller workflow here.
+#
 # Secrets:
-#   XAI_API_KEY — required. ~/.grok/config.toml points grok-4.6 at
-#     https://api.x.ai/v1 and this env var. SuperGrok session auth is not used.
+#   XAI_API_KEY — required at runtime. ~/.grok/config.toml points
+#     grok-4.6 at https://api.x.ai/v1 and this env var. SuperGrok
+#     session auth is not used.
 name: Grok code review
 
 on:
@@ -15,22 +42,38 @@ on:
         description: PR number to review
         required: true
         type: string
+  workflow_call:
+    inputs:
+      pr_number:
+        description: PR number to review when the caller is not a pull_request event
+        required: false
+        type: string
+    secrets:
+      XAI_API_KEY:
+        description: "Existing org xAI API key. Callers should pass secrets: inherit."
+        required: false
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: grok-code-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  group: grok-code-review-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
   review:
     name: Grok Build review
-    # Docs is AI-produced internal docs; skip entirely. Still skip drafts.
+    # NO SCAN repos are skipped entirely, even if a caller or ruleset
+    # would otherwise fire. Still skip drafts on pull_request;
+    # workflow_dispatch and workflow_call remain allowed.
     if: >-
+      github.repository != 'RetireGolden/.github' &&
+      github.repository != 'RetireGolden/cla-signatures' &&
+      github.repository != 'RetireGolden/RetireBench-private' &&
       github.repository != 'RetireGolden/RetireGolden-Docs' &&
       (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'workflow_call' ||
        (github.event_name == 'pull_request' && !github.event.pull_request.draft))
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -82,9 +125,23 @@ jobs:
                 echo "EOF"
               } >> "$GITHUB_OUTPUT"
               ;;
+            RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro|RetireGolden/RetireBench)
+              echo "effort=medium" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Major issues and security only. This is not a full AGENTS.md audit."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
             *)
-              echo "effort=" >> "$GITHUB_OUTPUT"
-              echo "custom_instructions=" >> "$GITHUB_OUTPUT"
+              # Empty effort = grok CLI default, which can be high.
+              # Unlisted repos must not silently inherit HIGH.
+              echo "effort=low" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "This repository is not on the HIGH or MEDIUM Grok review list. Do not run a high-effort or full AGENTS.md audit. Flag only obvious defects and security issues."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
               ;;
           esac
 
@@ -96,7 +153,7 @@ jobs:
           # Dummy JSON only; real auth is XAI_API_KEY + config.toml (api.x.ai).
           grok_auth_json: "{}"
           github_token: ${{ github.token }}
-          pr_number: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
           model: grok-4.6
           effort: ${{ steps.policy.outputs.effort }}
           custom_instructions: ${{ steps.policy.outputs.custom_instructions }}
