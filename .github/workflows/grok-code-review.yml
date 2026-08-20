@@ -26,11 +26,14 @@
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
 #   grok-4.6, existing per-repo effort, omit max_turns (action default 50).
-# Follow-up (synchronize): grok-build-0.1 (not an alias), effort=low,
-#   max_turns=15, append "latest commit only" to custom_instructions.
+# Follow-up (synchronize): grok-4.6, effort=low, max_turns=15, append
+#   "latest commit only" to custom_instructions. grok-build-0.1 is not
+#   used: on RetireGolden-Pro#178 it hit max turns, emitted no JSON,
+#   and the action annotated dummy grok_auth_json as SuperGrok session
+#   expiry. Same XAI_API_KEY + api.x.ai path as first-pass. Cost
+#   control is low effort + fewer turns, not a second SKU.
 # The action still embeds the full `gh pr diff`; we cannot make the
-# review commit-only without forking it. Cheaper model + fewer turns
-# is the intended cost control.
+# review commit-only without forking it.
 #
 # The job-level if still refuses NO SCAN repos even if a ruleset or
 # caller would otherwise fire. This repo (RetireGolden/.github) is
@@ -40,8 +43,9 @@
 #
 # Secrets:
 #   XAI_API_KEY — required at runtime. ~/.grok/config.toml points
-#     grok-4.6 and grok-build-0.1 at https://api.x.ai/v1 and this
-#     env var. SuperGrok session auth is not used.
+#     grok-4.6 at https://api.x.ai/v1 and this env var. Dummy
+#     grok_auth_json {} satisfies the action input only; it is not
+#     a session. SuperGrok session auth is not used.
 name: Grok code review
 
 on:
@@ -110,17 +114,13 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Point grok-4.6 and grok-build-0.1 at api.x.ai
+      - name: Point grok-4.6 at api.x.ai
         if: env.XAI_API_KEY != ''
         run: |
           mkdir -p ~/.grok
           printf '%s\n' \
             '[model."grok-4.6"]' \
             'model = "grok-4.6"' \
-            'base_url = "https://api.x.ai/v1"' \
-            'env_key = "XAI_API_KEY"' \
-            '[model."grok-build-0.1"]' \
-            'model = "grok-build-0.1"' \
             'base_url = "https://api.x.ai/v1"' \
             'env_key = "XAI_API_KEY"' \
             '[models]' \
@@ -187,7 +187,7 @@ jobs:
             echo "effort=$POLICY_EFFORT" >> "$GITHUB_OUTPUT"
           elif [ "$EVENT_ACTION" = "synchronize" ]; then
             KIND=follow-up
-            echo "model=grok-build-0.1" >> "$GITHUB_OUTPUT"
+            echo "model=grok-4.6" >> "$GITHUB_OUTPUT"
             echo "effort=low" >> "$GITHUB_OUTPUT"
           else
             KIND=skip
@@ -222,8 +222,9 @@ jobs:
           fail_on: never
           status_comments: "true"
 
-      # Follow-up: cheaper model + max_turns 15. The action still embeds
-      # the full `gh pr diff`; commit-only review would need a fork.
+      # Follow-up: grok-4.6 + effort=low + max_turns 15. Same XAI_API_KEY
+      # + config.toml auth as first-pass. The action still embeds the
+      # full `gh pr diff`; commit-only review would need a fork.
       - name: Run Grok Build follow-up review
         id: grok_followup
         if: steps.pass.outputs.kind == 'follow-up'
