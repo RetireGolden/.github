@@ -18,18 +18,30 @@
 # undeclared; declaring the name documents the contract.
 #
 # github.event_name inside a called workflow is the caller's event
-# (usually pull_request), not workflow_call. Read PR number from the
+# (usually pull_request), not workflow_call. github.event.action is
+# opened / synchronize / reopened / ready_for_review. Do not treat
+# workflow_call as first-pass by default. Read PR number from the
 # caller event first; use inputs.pr_number for dispatch/call. Do not
 # use github.event.inputs for workflow_call (that context is empty).
 #
+# First-pass (opened / reopened / ready_for_review / workflow_dispatch):
+#   grok-4.6, existing per-repo effort, omit max_turns (action default 50).
+# Follow-up (synchronize): grok-build-0.1 (not an alias), effort=low,
+#   max_turns=15, append "latest commit only" to custom_instructions.
+# The action still embeds the full `gh pr diff`; we cannot make the
+# review commit-only without forking it. Cheaper model + fewer turns
+# is the intended cost control.
+#
 # The job-level if still refuses NO SCAN repos even if a ruleset or
 # caller would otherwise fire. This repo (RetireGolden/.github) is
-# NO SCAN — do not add a caller workflow here.
+# NO SCAN — do not add a caller workflow here. Thin callers in
+# RetireGolden, MCP, Pro, retiregolden.org, and RetireBench should
+# keep firing on synchronize; pass-type is selected here.
 #
 # Secrets:
 #   XAI_API_KEY — required at runtime. ~/.grok/config.toml points
-#     grok-4.6 at https://api.x.ai/v1 and this env var. SuperGrok
-#     session auth is not used.
+#     grok-4.6 and grok-build-0.1 at https://api.x.ai/v1 and this
+#     env var. SuperGrok session auth is not used.
 name: Grok code review
 
 on:
@@ -65,15 +77,17 @@ jobs:
   review:
     name: Grok Build review
     # NO SCAN repos are skipped entirely, even if a caller or ruleset
-    # would otherwise fire. Still skip drafts on pull_request;
-    # workflow_dispatch and workflow_call remain allowed.
+    # would otherwise fire. Still skip drafts on pull_request.
+    # workflow_dispatch remains allowed (first-pass).
+    # Do not treat workflow_call as a run or first-pass discriminator:
+    # github.event_name inside a called workflow is the caller's event
+    # (usually pull_request). Pass type is github.event.action.
     if: >-
       github.repository != 'RetireGolden/.github' &&
       github.repository != 'RetireGolden/cla-signatures' &&
       github.repository != 'RetireGolden/RetireBench-private' &&
       github.repository != 'RetireGolden/RetireGolden-Docs' &&
       (github.event_name == 'workflow_dispatch' ||
-       github.event_name == 'workflow_call' ||
        (github.event_name == 'pull_request' && !github.event.pull_request.draft))
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -92,13 +106,17 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Point grok-4.6 at api.x.ai
+      - name: Point grok-4.6 and grok-build-0.1 at api.x.ai
         if: env.XAI_API_KEY != ''
         run: |
           mkdir -p ~/.grok
           printf '%s\n' \
             '[model."grok-4.6"]' \
             'model = "grok-4.6"' \
+            'base_url = "https://api.x.ai/v1"' \
+            'env_key = "XAI_API_KEY"' \
+            '[model."grok-build-0.1"]' \
+            'model = "grok-build-0.1"' \
             'base_url = "https://api.x.ai/v1"' \
             'env_key = "XAI_API_KEY"' \
             '[models]' \
@@ -145,8 +163,47 @@ jobs:
               ;;
           esac
 
+      - name: Select first-pass vs follow-up
+        id: pass
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          POLICY_EFFORT: ${{ steps.policy.outputs.effort }}
+          POLICY_INSTRUCTIONS: ${{ steps.policy.outputs.custom_instructions }}
+        run: |
+          # github.event_name inside workflow_call is the caller's event
+          # (usually pull_request), not workflow_call. Derive pass type
+          # from github.event.action. workflow_dispatch is first-pass.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || \
+             [ "$EVENT_ACTION" = "opened" ] || \
+             [ "$EVENT_ACTION" = "reopened" ] || \
+             [ "$EVENT_ACTION" = "ready_for_review" ]; then
+            KIND=first-pass
+            echo "model=grok-4.6" >> "$GITHUB_OUTPUT"
+            echo "effort=$POLICY_EFFORT" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_ACTION" = "synchronize" ]; then
+            KIND=follow-up
+            echo "model=grok-build-0.1" >> "$GITHUB_OUTPUT"
+            echo "effort=low" >> "$GITHUB_OUTPUT"
+          else
+            KIND=skip
+            echo "::notice::Unrecognized caller event ($EVENT_NAME / $EVENT_ACTION); not a first-pass or follow-up review."
+          fi
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          {
+            echo "custom_instructions<<EOF"
+            printf '%s\n' "$POLICY_INSTRUCTIONS"
+            if [ "$KIND" = "follow-up" ]; then
+              echo "Review only the latest commit. Do not re-litigate already-posted findings."
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # First-pass omits max_turns so the action default (50) applies.
+      # A blank max_turns input would override that default to empty.
       - name: Run Grok Build review
-        id: grok
+        id: grok_first
+        if: steps.pass.outputs.kind == 'first-pass'
         uses: 0xr3ngar/grok-build-review-action@eded30018cdee4e83dfca14d18f292b860c30cdd # v1.0.2
         with:
           # Official action still requires this input and writes ~/.grok/auth.json.
@@ -154,23 +211,69 @@ jobs:
           grok_auth_json: "{}"
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
-          model: grok-4.6
-          effort: ${{ steps.policy.outputs.effort }}
-          custom_instructions: ${{ steps.policy.outputs.custom_instructions }}
+          model: ${{ steps.pass.outputs.model }}
+          effort: ${{ steps.pass.outputs.effort }}
+          custom_instructions: ${{ steps.pass.outputs.custom_instructions }}
+          roast_level: professional
+          fail_on: never
+          status_comments: "true"
+
+      # Follow-up: cheaper model + max_turns 15. The action still embeds
+      # the full `gh pr diff`; commit-only review would need a fork.
+      - name: Run Grok Build follow-up review
+        id: grok_followup
+        if: steps.pass.outputs.kind == 'follow-up'
+        uses: 0xr3ngar/grok-build-review-action@eded30018cdee4e83dfca14d18f292b860c30cdd # v1.0.2
+        with:
+          # Official action still requires this input and writes ~/.grok/auth.json.
+          # Dummy JSON only; real auth is XAI_API_KEY + config.toml (api.x.ai).
+          grok_auth_json: "{}"
+          github_token: ${{ github.token }}
+          pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+          model: ${{ steps.pass.outputs.model }}
+          effort: ${{ steps.pass.outputs.effort }}
+          max_turns: 15
+          custom_instructions: ${{ steps.pass.outputs.custom_instructions }}
           roast_level: professional
           fail_on: never
           status_comments: "true"
 
       - name: Summary
         if: always()
+        env:
+          KIND: ${{ steps.pass.outputs.kind }}
+          MODEL: ${{ steps.pass.outputs.model }}
+          EFFORT: ${{ steps.pass.outputs.effort }}
+          VERDICT_FIRST: ${{ steps.grok_first.outputs.verdict }}
+          VERDICT_FOLLOW: ${{ steps.grok_followup.outputs.verdict }}
+          ISSUES_FIRST: ${{ steps.grok_first.outputs.issue_count }}
+          ISSUES_FOLLOW: ${{ steps.grok_followup.outputs.issue_count }}
+          BUGS_FIRST: ${{ steps.grok_first.outputs.bug_count }}
+          BUGS_FOLLOW: ${{ steps.grok_followup.outputs.bug_count }}
+          URL_FIRST: ${{ steps.grok_first.outputs.review_url }}
+          URL_FOLLOW: ${{ steps.grok_followup.outputs.review_url }}
         run: |
+          if [ "$KIND" = "follow-up" ]; then
+            VERDICT="$VERDICT_FOLLOW"
+            ISSUES="$ISSUES_FOLLOW"
+            BUGS="$BUGS_FOLLOW"
+            REVIEW="$URL_FOLLOW"
+          else
+            VERDICT="$VERDICT_FIRST"
+            ISSUES="$ISSUES_FIRST"
+            BUGS="$BUGS_FIRST"
+            REVIEW="$URL_FIRST"
+          fi
           {
             echo "### Grok code review"
             echo ""
             echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Verdict | \`${{ steps.grok.outputs.verdict }}\` |"
-            echo "| Issues | \`${{ steps.grok.outputs.issue_count }}\` |"
-            echo "| Bugs | \`${{ steps.grok.outputs.bug_count }}\` |"
-            echo "| Review | ${{ steps.grok.outputs.review_url }}"
+            echo "| Pass | \`$KIND\` |"
+            echo "| Model | \`$MODEL\` |"
+            echo "| Effort | \`$EFFORT\` |"
+            echo "| Verdict | \`$VERDICT\` |"
+            echo "| Issues | \`$ISSUES\` |"
+            echo "| Bugs | \`$BUGS\` |"
+            echo "| Review | $REVIEW"
           } >> "$GITHUB_STEP_SUMMARY"
