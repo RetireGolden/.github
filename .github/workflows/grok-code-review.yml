@@ -25,7 +25,7 @@
 # use github.event.inputs for workflow_call (that context is empty).
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
-#   FlyOverCoderKY/grok-pr-review-action@v1.0.1, grok-4.6,
+#   FlyOverCoderKY/grok-pr-review-action@v1.0.2, grok-4.6,
 #   review_scope: full-pr, review_mode: auto, existing per-repo
 #   effort, omit max_turns (action default 50).
 # Follow-up (synchronize): same action and grok-4.6, review_scope:
@@ -33,7 +33,7 @@
 #   (keep verify on grok-4.6 for xAI prompt-cache reuse). The
 #   latest-commit scope embeds only the new work; do not append
 #   "latest commit only" to custom_instructions. Pin the immutable
-#   v1.0.1 tag until after smoke; do not use @v1 or @main yet.
+#   v1.0.2 tag until after smoke; do not use @v1 or @main yet.
 # pegma-dev is intentionally not switched yet.
 #
 # The job-level if still refuses NO SCAN repos even if a ruleset or
@@ -188,7 +188,7 @@ jobs:
       - name: Run Grok first-pass review
         id: grok_first
         if: steps.pass.outputs.kind == 'first-pass'
-        uses: FlyOverCoderKY/grok-pr-review-action@v1.0.1
+        uses: FlyOverCoderKY/grok-pr-review-action@v1.0.2
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
@@ -209,7 +209,7 @@ jobs:
       - name: Run Grok follow-up review
         id: grok_followup
         if: steps.pass.outputs.kind == 'follow-up'
-        uses: FlyOverCoderKY/grok-pr-review-action@v1.0.1
+        uses: FlyOverCoderKY/grok-pr-review-action@v1.0.2
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
