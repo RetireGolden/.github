@@ -43,15 +43,19 @@
 #   cancelling. When the action returns a real verdict
 #   (clean | issues | partial), the job writes a durable PR comment
 #   containing <!-- grok-org-first-pass:done --> and posts commit
-#   status context grok-first-pass on the head SHA.
+#   status context grok-first-pass on the head SHA. Marker comments
+#   are only trusted from github-actions[bot] (this workflow posts
+#   them with github.token). A matching comment from any other login
+#   is ignored by the gate and by follow-up.
 #
 # Follow-up (synchronize): same action and grok-4.6, review_scope:
 #   latest-commit, effort=low, max_turns=30. Do not set verify_model
 #   (keep verify on grok-4.6 for xAI prompt-cache reuse). The
 #   latest-commit scope embeds only the new work; do not append
 #   "latest commit only" to custom_instructions. Follow-up does not
-#   call Grok until the first-pass done marker exists. If first-pass
-#   is still running or never succeeded, the follow-up job exits 0
+#   call Grok until a github-actions[bot] first-pass done marker
+#   exists. If first-pass is still running or never succeeded, the
+#   follow-up job exits 0
 #   with a notice and spends no xAI tokens. After first-pass
 #   succeeds, job-level concurrency cancels older follow-ups so rapid
 #   Codex pushes keep only the latest incremental review.
@@ -66,7 +70,8 @@
 #   synchronize events stay green (carry forward) so incremental
 #   follow-up cancels cannot block merge. The job also copies
 #   commit status grok-first-pass onto the current head SHA when
-#   the marker is present.
+#   the marker is present. Only a github-actions[bot] comment
+#   opens the gate; anyone else posting the HTML marker is ignored.
 #
 # Branch protection (Nathan):
 #   Require this Actions check on protected branches of target repos:
@@ -245,11 +250,12 @@ jobs:
             exit 1
           fi
 
+          # Trust only github-actions[bot] (this workflow's github.token).
           find_comment_id() {
             local needle="$1"
             MARKER_NEEDLE="$needle" gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --jq '.[] | select(.body != null and (.body | contains(env.MARKER_NEEDLE))) | .id' \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and .body != null and (.body | contains(env.MARKER_NEEDLE))) | .id' \
               | head -n1 || true
           }
 
@@ -363,11 +369,12 @@ jobs:
             echo "::notice::Skipping Grok follow-up: missing PR number. No xAI API spend."
             exit 0
           fi
+          # Trust only github-actions[bot] (this workflow's github.token).
           find_comment_id() {
             local needle="$1"
             MARKER_NEEDLE="$needle" gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --jq '.[] | select(.body != null and (.body | contains(env.MARKER_NEEDLE))) | .id' \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and .body != null and (.body | contains(env.MARKER_NEEDLE))) | .id' \
               | head -n1 || true
           }
           if [ -n "$(find_comment_id "$DONE_MARKER" || true)" ]; then
@@ -526,11 +533,12 @@ jobs:
             exit 1
           fi
 
+          # Trust only github-actions[bot] (this workflow's github.token).
           find_comment_id() {
             local needle="$1"
             MARKER_NEEDLE="$needle" gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
-              --jq '.[] | select(.body != null and (.body | contains(env.MARKER_NEEDLE))) | .id' \
+              --jq '.[] | select(.user.login == "github-actions[bot]" and .body != null and (.body | contains(env.MARKER_NEEDLE))) | .id' \
               | head -n1 || true
           }
 
