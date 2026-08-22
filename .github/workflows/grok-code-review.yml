@@ -3,12 +3,21 @@
 # Target repos invoke this file via a thin caller, for example:
 #
 #   jobs:
-#     grok:
+#     review:
 #       uses: RetireGolden/.github/.github/workflows/grok-code-review.yml@main
 #       secrets: inherit
 #       permissions:
 #         contents: read
 #         pull-requests: write
+#         statuses: write
+#         checks: write
+#
+# Do not add workflow-level concurrency with cancel-in-progress on the
+# thin caller. That cancels the whole reusable run, including an
+# in-progress first-pass. Workflow-level cancel-in-progress here is
+# also gone: Pro #189 had six cancelled Grok runs, zero review
+# comments, and a merge before first-pass landed. Job-level groups
+# keep the opening review uncancelled and let follow-ups wait.
 #
 # Callers should `secrets: inherit` so the existing org XAI_API_KEY is
 # available here. Do not invent a new secret. workflow_call declares
@@ -27,26 +36,63 @@
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
 #   FlyOverCoderKY/grok-pr-review-action@v1.0.3, grok-4.6,
 #   review_scope: full-pr, review_mode: auto, existing per-repo
-#   effort, omit max_turns (action default 50).
+#   effort, omit max_turns (action default 50). Job-level concurrency
+#   group is per-PR; cancel-in-progress is false so a later
+#   synchronize cannot cancel this review. A duplicate first-pass
+#   (reopened / ready_for_review / dispatch) queues instead of
+#   cancelling. When the action returns a real verdict
+#   (clean | issues | partial), the job writes a durable PR comment
+#   containing <!-- grok-org-first-pass:done --> and posts commit
+#   status context grok-first-pass on the head SHA.
+#
 # Follow-up (synchronize): same action and grok-4.6, review_scope:
 #   latest-commit, effort=low, max_turns=30. Do not set verify_model
 #   (keep verify on grok-4.6 for xAI prompt-cache reuse). The
 #   latest-commit scope embeds only the new work; do not append
-#   "latest commit only" to custom_instructions. Pin the immutable
-#   v1.0.3 tag until after smoke; do not use @v1 or @main yet.
-# pegma-dev is intentionally not switched yet.
+#   "latest commit only" to custom_instructions. Follow-up does not
+#   call Grok until the first-pass done marker exists. If first-pass
+#   is still running or never succeeded, the follow-up job exits 0
+#   with a notice and spends no xAI tokens. After first-pass
+#   succeeds, job-level concurrency cancels older follow-ups so rapid
+#   Codex pushes keep only the latest incremental review.
+#   Pin the immutable v1.0.3 tag until after smoke; do not use @v1
+#   or @main yet. pegma-dev is intentionally not switched yet.
 #
-# The job-level if still refuses NO SCAN repos even if a ruleset or
-# caller would otherwise fire. This repo (RetireGolden/.github) is
-# NO SCAN — do not add a caller workflow here. Thin callers in
-# RetireGolden, MCP, Pro, retiregolden.org, and RetireBench should
-# keep firing on synchronize; pass-type is selected here.
+# Merge gate (grok-first-pass-gate): always runs on pull_request
+#   (and workflow_dispatch) so the check name is stable for branch
+#   protection. It stays pending or fails until first-pass has
+#   completed with clean | issues | partial. error / cancelled /
+#   missing keep the gate red. After the done marker exists, later
+#   synchronize events stay green (carry forward) so incremental
+#   follow-up cancels cannot block merge. The job also copies
+#   commit status grok-first-pass onto the current head SHA when
+#   the marker is present.
+#
+# Branch protection (Nathan):
+#   Require this Actions check on protected branches of target repos:
+#     review / grok-first-pass-gate
+#   That is job grok-first-pass-gate when the thin caller job id is
+#   `review` (current contract in RetireGolden, MCP, Pro,
+#   retiregolden.org, RetireBench). GitHub prefixes reusable-workflow
+#   checks with the caller job id. Do not require "Grok first-pass
+#   review" or "Grok follow-up review" — those are not the merge
+#   gate, and follow-up may cancel. Optional commit status context
+#   grok-first-pass is posted when the caller grants statuses: write.
+#   Do not change branch protection via API from this workflow.
+#
+# The review-job if still refuses NO SCAN repos even if a ruleset or
+# caller would otherwise fire. The gate succeeds on NO SCAN so an
+# accidental caller cannot block merge. This repo
+# (RetireGolden/.github) is NO SCAN — do not add a caller workflow
+# here. Thin callers in RetireGolden, MCP, Pro, retiregolden.org,
+# and RetireBench should keep firing on synchronize; pass-type is
+# selected here.
 #
 # Secrets:
-#   XAI_API_KEY — required at runtime. Pass it as env on the action
-#     steps (not as an action input). The action writes a job-temp
-#     GROK_HOME config.toml that points grok-4.6 at
-#     https://api.x.ai/v1. SuperGrok / auth.json are not used.
+#   XAI_API_KEY — required at runtime for review jobs. Pass it as
+#     env on the action steps (not as an action input). The action
+#     writes a job-temp GROK_HOME config.toml that points grok-4.6
+#     at https://api.x.ai/v1. SuperGrok / auth.json are not used.
 name: Grok code review
 
 on:
@@ -73,18 +119,18 @@ on:
 permissions:
   contents: read
   pull-requests: write
-
-# Same PR, two groups: follow-up must not cancel an in-progress first-pass
-# (opened / reopened / ready_for_review / workflow_dispatch). Rapid
-# follow-ups still cancel each other; rapid first-passes still cancel
-# each other. cancel-in-progress stays true within each group.
-concurrency:
-  group: grok-code-review-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}-${{ github.event.action == 'synchronize' && 'follow-up' || 'first-pass' }}
-  cancel-in-progress: true
+  statuses: write
+  checks: write
 
 jobs:
-  review:
-    name: Grok PR review
+  grok-first-pass:
+    name: Grok first-pass review
+    # First-pass is sacred. Job-level concurrency with
+    # cancel-in-progress: false means synchronize cannot cancel this
+    # job. A second first-pass for the same PR queues.
+    concurrency:
+      group: grok-first-pass-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+      cancel-in-progress: false
     # NO SCAN repos are skipped entirely, even if a caller or ruleset
     # would otherwise fire. Still skip drafts on pull_request.
     # workflow_dispatch remains allowed (first-pass).
@@ -97,11 +143,18 @@ jobs:
       github.repository != 'RetireGolden/RetireBench-private' &&
       github.repository != 'RetireGolden/RetireGolden-Docs' &&
       (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'pull_request' && !github.event.pull_request.draft))
+       (github.event_name == 'pull_request' &&
+        !github.event.pull_request.draft &&
+        (github.event.action == 'opened' ||
+         github.event.action == 'reopened' ||
+         github.event.action == 'ready_for_review')))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Require XAI_API_KEY
         if: env.XAI_API_KEY == ''
@@ -156,38 +209,10 @@ jobs:
               ;;
           esac
 
-      - name: Select first-pass vs follow-up
-        id: pass
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_ACTION: ${{ github.event.action }}
-          POLICY_EFFORT: ${{ steps.policy.outputs.effort }}
-        run: |
-          # github.event_name inside workflow_call is the caller's event
-          # (usually pull_request), not workflow_call. Derive pass type
-          # from github.event.action. workflow_dispatch is first-pass.
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] || \
-             [ "$EVENT_ACTION" = "opened" ] || \
-             [ "$EVENT_ACTION" = "reopened" ] || \
-             [ "$EVENT_ACTION" = "ready_for_review" ]; then
-            KIND=first-pass
-            echo "model=grok-4.6" >> "$GITHUB_OUTPUT"
-            echo "effort=$POLICY_EFFORT" >> "$GITHUB_OUTPUT"
-          elif [ "$EVENT_ACTION" = "synchronize" ]; then
-            KIND=follow-up
-            echo "model=grok-4.6" >> "$GITHUB_OUTPUT"
-            echo "effort=low" >> "$GITHUB_OUTPUT"
-          else
-            KIND=skip
-            echo "::notice::Unrecognized caller event ($EVENT_NAME / $EVENT_ACTION); not a first-pass or follow-up review."
-          fi
-          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
-
       # First-pass omits max_turns so the action default (50) applies.
       # A blank max_turns input would override that default to empty.
       - name: Run Grok first-pass review
         id: grok_first
-        if: steps.pass.outputs.kind == 'first-pass'
         uses: FlyOverCoderKY/grok-pr-review-action@v1.0.3
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
@@ -195,7 +220,7 @@ jobs:
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
           model: grok-4.6
-          effort: ${{ steps.pass.outputs.effort }}
+          effort: ${{ steps.policy.outputs.effort }}
           review_scope: full-pr
           review_mode: auto
           custom_instructions: ${{ steps.policy.outputs.custom_instructions }}
@@ -203,12 +228,220 @@ jobs:
           fail_on: never
           status_comments: "true"
 
+      - name: Record first-pass marker
+        if: always() && !cancelled()
+        env:
+          VERDICT: ${{ steps.grok_first.outputs.verdict }}
+          GROK_OUTCOME: ${{ steps.grok_first.outcome }}
+          ISSUE_COUNT: ${{ steps.grok_first.outputs.issue_count }}
+          REVIEW_URL: ${{ steps.grok_first.outputs.review_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          DONE_MARKER='<!-- grok-org-first-pass:done -->'
+          ERROR_MARKER='<!-- grok-org-first-pass:error -->'
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::Missing PR number; cannot write first-pass marker."
+            exit 1
+          fi
+
+          find_comment_id() {
+            local needle="$1"
+            MARKER_NEEDLE="$needle" gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --jq '.[] | select(.body != null and (.body | contains(env.MARKER_NEEDLE))) | .id' \
+              | head -n1 || true
+          }
+
+          upsert_comment() {
+            local needle="$1"
+            local body="$2"
+            local existing
+            existing="$(find_comment_id "$needle" || true)"
+            if [ -z "$existing" ] && [ "$needle" = "$DONE_MARKER" ]; then
+              existing="$(find_comment_id "$ERROR_MARKER" || true)"
+            fi
+            if [ -n "$existing" ]; then
+              jq -n --arg body "$body" '{body: $body}' \
+                | gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" --input -
+            else
+              jq -n --arg body "$body" '{body: $body}' \
+                | gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input -
+            fi
+          }
+
+          post_status() {
+            local state="$1"
+            local desc="$2"
+            if [ -z "${HEAD_SHA:-}" ]; then
+              echo "::notice::No head SHA; skipping grok-first-pass commit status."
+              return 0
+            fi
+            if ! gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+              -f state="$state" \
+              -f context=grok-first-pass \
+              -f description="$desc" \
+              -f target_url="$RUN_URL"; then
+              echo "::notice::Could not write grok-first-pass commit status. Thin callers need statuses: write."
+            fi
+          }
+
+          if [ "$GROK_OUTCOME" = "success" ] && { [ "$VERDICT" = "clean" ] || [ "$VERDICT" = "issues" ] || [ "$VERDICT" = "partial" ]; }; then
+            BODY=$(printf '%s\n\nGrok **first-pass** review completed with verdict `%s`.\n\nFollow-up synchronize reviews wait for this marker. The merge gate `grok-first-pass-gate` stays green after later pushes.\n\n| Field | Value |\n| --- | --- |\n| Verdict | `%s` |\n| Open issues | `%s` |\n| Head | `%s` |\n| Review | %s |\n| Run | %s |\n' \
+              "$DONE_MARKER" "$VERDICT" "$VERDICT" "${ISSUE_COUNT:-}" "$HEAD_SHA" "${REVIEW_URL:-}" "$RUN_URL")
+            upsert_comment "$DONE_MARKER" "$BODY"
+            post_status success "Grok first-pass completed (${VERDICT})"
+            echo "Wrote first-pass done marker (verdict=${VERDICT})."
+          else
+            if [ -n "$(find_comment_id "$DONE_MARKER" || true)" ]; then
+              echo "::notice::A first-pass done marker already exists; not overwriting it with error."
+              exit 0
+            fi
+            BODY=$(printf '%s\n\nGrok **first-pass** did not complete with a usable verdict (`clean` / `issues` / `partial`). The merge gate stays red until a successful first-pass.\n\n| Field | Value |\n| --- | --- |\n| Outcome | `%s` |\n| Verdict | `%s` |\n| Head | `%s` |\n| Run | %s |\n' \
+              "$ERROR_MARKER" "${GROK_OUTCOME:-missing}" "${VERDICT:-missing}" "$HEAD_SHA" "$RUN_URL")
+            upsert_comment "$ERROR_MARKER" "$BODY"
+            post_status failure "Grok first-pass did not complete (${GROK_OUTCOME:-missing}/${VERDICT:-missing})"
+            echo "Wrote first-pass error marker (outcome=${GROK_OUTCOME:-missing} verdict=${VERDICT:-missing})."
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          EFFORT: ${{ steps.policy.outputs.effort }}
+          VERDICT: ${{ steps.grok_first.outputs.verdict }}
+          ISSUES: ${{ steps.grok_first.outputs.issue_count }}
+          BUGS: ${{ steps.grok_first.outputs.bug_count }}
+          ROUND: ${{ steps.grok_first.outputs.round }}
+          REVIEW: ${{ steps.grok_first.outputs.review_url }}
+        run: |
+          {
+            echo "### Grok code review"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Pass | \`first-pass\` |"
+            echo "| Model | \`grok-4.6\` |"
+            echo "| Effort | \`$EFFORT\` |"
+            echo "| Round | \`$ROUND\` |"
+            echo "| Verdict | \`$VERDICT\` |"
+            echo "| Open issues | \`$ISSUES\` |"
+            echo "| Open bugs | \`$BUGS\` |"
+            echo "| Review | $REVIEW"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  grok-follow-up:
+    name: Grok follow-up review
+    # Rapid synchronize events cancel older follow-ups only.
+    # This group is distinct from first-pass, so pushes cannot
+    # cancel the opening review.
+    concurrency:
+      group: grok-follow-up-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+      cancel-in-progress: true
+    if: >-
+      github.repository != 'RetireGolden/.github' &&
+      github.repository != 'RetireGolden/cla-signatures' &&
+      github.repository != 'RetireGolden/RetireBench-private' &&
+      github.repository != 'RetireGolden/RetireGolden-Docs' &&
+      github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require first-pass completion
+        id: first_pass
+        run: |
+          set -euo pipefail
+          DONE_MARKER='<!-- grok-org-first-pass:done -->'
+          ERROR_MARKER='<!-- grok-org-first-pass:error -->'
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::notice::Skipping Grok follow-up: missing PR number. No xAI API spend."
+            exit 0
+          fi
+          find_comment_id() {
+            local needle="$1"
+            MARKER_NEEDLE="$needle" gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --jq '.[] | select(.body != null and (.body | contains(env.MARKER_NEEDLE))) | .id' \
+              | head -n1 || true
+          }
+          if [ -n "$(find_comment_id "$DONE_MARKER" || true)" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "First-pass done marker found; running incremental review."
+            exit 0
+          fi
+          if [ -n "$(find_comment_id "$ERROR_MARKER" || true)" ]; then
+            echo "::notice::Skipping Grok follow-up: first-pass finished without a usable verdict (error). No xAI API spend."
+            exit 0
+          fi
+          echo "::notice::Skipping Grok follow-up: first-pass has not completed with a real verdict for this PR (still running or never succeeded). No xAI API spend."
+
+      - name: Require XAI_API_KEY
+        if: steps.first_pass.outputs.ready == 'true' && env.XAI_API_KEY == ''
+        run: |
+          echo "::error::XAI_API_KEY is empty. This workflow uses only the org API key against api.x.ai; SuperGrok is not a fallback."
+          exit 1
+
+      - name: Checkout PR head
+        if: steps.first_pass.outputs.ready == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set per-repo review policy
+        if: steps.first_pass.outputs.ready == 'true'
+        id: policy
+        run: |
+          case "$GITHUB_REPOSITORY" in
+            RetireGolden/RetireGolden)
+              echo "effort=high" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "On a calculation/logic diff, flag it if there is no unit test, or if the test only mirrors the new code with no citable source (statute subparagraph + what it requires, IRS pub, or DOCS/domain). A green test that only mirrors the new code does not count. Fixtures must discriminate between plausible statutory readings. Keep engine vs UI money-math leaks, CLA/commit identity, and no private planning. Still obey AGENTS.md."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/RetireGolden-MCP)
+              echo "effort=high" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Focus on tool/schema contracts, no invented tax or statute behavior, auth/secrets handling, CLA/commit identity, and public-copy. Obey AGENTS.md."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro|RetireGolden/RetireBench)
+              echo "effort=medium" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Major issues and security only. This is not a full AGENTS.md audit."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              # Empty effort = grok CLI default, which can be high.
+              # Unlisted repos must not silently inherit HIGH.
+              echo "effort=low" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "This repository is not on the HIGH or MEDIUM Grok review list. Do not run a high-effort or full AGENTS.md audit. Flag only obvious defects and security issues."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
       # Follow-up: latest-commit scope on the same grok-4.6 model.
       # Do not set verify_model (cache reuse). max_turns 30 is enough
       # for verify; 15 was a cost band-aid for the old full-diff action.
       - name: Run Grok follow-up review
         id: grok_followup
-        if: steps.pass.outputs.kind == 'follow-up'
+        if: steps.first_pass.outputs.ready == 'true'
         uses: FlyOverCoderKY/grok-pr-review-action@v1.0.3
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
@@ -216,7 +449,7 @@ jobs:
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
           model: grok-4.6
-          effort: ${{ steps.pass.outputs.effort }}
+          effort: low
           max_turns: 30
           review_scope: latest-commit
           review_mode: auto
@@ -228,44 +461,138 @@ jobs:
       - name: Summary
         if: always()
         env:
-          KIND: ${{ steps.pass.outputs.kind }}
-          MODEL: ${{ steps.pass.outputs.model }}
-          EFFORT: ${{ steps.pass.outputs.effort }}
-          VERDICT_FIRST: ${{ steps.grok_first.outputs.verdict }}
-          VERDICT_FOLLOW: ${{ steps.grok_followup.outputs.verdict }}
-          ISSUES_FIRST: ${{ steps.grok_first.outputs.issue_count }}
-          ISSUES_FOLLOW: ${{ steps.grok_followup.outputs.issue_count }}
-          BUGS_FIRST: ${{ steps.grok_first.outputs.bug_count }}
-          BUGS_FOLLOW: ${{ steps.grok_followup.outputs.bug_count }}
-          ROUND_FIRST: ${{ steps.grok_first.outputs.round }}
-          ROUND_FOLLOW: ${{ steps.grok_followup.outputs.round }}
-          URL_FIRST: ${{ steps.grok_first.outputs.review_url }}
-          URL_FOLLOW: ${{ steps.grok_followup.outputs.review_url }}
+          READY: ${{ steps.first_pass.outputs.ready }}
+          VERDICT: ${{ steps.grok_followup.outputs.verdict }}
+          ISSUES: ${{ steps.grok_followup.outputs.issue_count }}
+          BUGS: ${{ steps.grok_followup.outputs.bug_count }}
+          ROUND: ${{ steps.grok_followup.outputs.round }}
+          REVIEW: ${{ steps.grok_followup.outputs.review_url }}
         run: |
-          if [ "$KIND" = "follow-up" ]; then
-            VERDICT="$VERDICT_FOLLOW"
-            ISSUES="$ISSUES_FOLLOW"
-            BUGS="$BUGS_FOLLOW"
-            ROUND="$ROUND_FOLLOW"
-            REVIEW="$URL_FOLLOW"
-          else
-            VERDICT="$VERDICT_FIRST"
-            ISSUES="$ISSUES_FIRST"
-            BUGS="$BUGS_FIRST"
-            ROUND="$ROUND_FIRST"
-            REVIEW="$URL_FIRST"
-          fi
           {
             echo "### Grok code review"
             echo ""
             echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Pass | \`$KIND\` |"
-            echo "| Model | \`$MODEL\` |"
-            echo "| Effort | \`$EFFORT\` |"
+            echo "| Pass | \`follow-up\` |"
+            echo "| Model | \`grok-4.6\` |"
+            echo "| Effort | \`low\` |"
+            echo "| First-pass ready | \`${READY:-false}\` |"
             echo "| Round | \`$ROUND\` |"
             echo "| Verdict | \`$VERDICT\` |"
             echo "| Open issues | \`$ISSUES\` |"
             echo "| Open bugs | \`$BUGS\` |"
             echo "| Review | $REVIEW"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Stable merge-gate check name. Standard thin caller job id is
+  # `review`, so branch protection should require:
+  #   review / grok-first-pass-gate
+  grok-first-pass-gate:
+    name: grok-first-pass-gate
+    needs: [grok-first-pass]
+    if: >-
+      always() &&
+      !cancelled() &&
+      (github.event_name == 'pull_request' ||
+       github.event_name == 'workflow_dispatch')
+    concurrency:
+      group: grok-first-pass-gate-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      FIRST_PASS_RESULT: ${{ needs.grok-first-pass.result }}
+      IS_DRAFT: ${{ github.event.pull_request.draft || false }}
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Evaluate first-pass gate
+        run: |
+          set -euo pipefail
+          DONE_MARKER='<!-- grok-org-first-pass:done -->'
+          ERROR_MARKER='<!-- grok-org-first-pass:error -->'
+
+          case "$GITHUB_REPOSITORY" in
+            RetireGolden/.github|RetireGolden/cla-signatures|RetireGolden/RetireBench-private|RetireGolden/RetireGolden-Docs)
+              echo "NO SCAN repository; grok-first-pass-gate succeeds without a review."
+              exit 0
+              ;;
+          esac
+
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::grok-first-pass-gate: missing PR number."
+            exit 1
+          fi
+
+          find_comment_id() {
+            local needle="$1"
+            MARKER_NEEDLE="$needle" gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --jq '.[] | select(.body != null and (.body | contains(env.MARKER_NEEDLE))) | .id' \
+              | head -n1 || true
+          }
+
+          carry_status() {
+            local desc="$1"
+            if [ -z "${HEAD_SHA:-}" ]; then
+              return 0
+            fi
+            if ! gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+              -f state=success \
+              -f context=grok-first-pass \
+              -f description="$desc" \
+              -f target_url="$RUN_URL"; then
+              echo "::notice::Could not carry grok-first-pass commit status onto ${HEAD_SHA}. Thin callers need statuses: write."
+            fi
+          }
+
+          succeed() {
+            echo "$1"
+            carry_status "Grok first-pass completed; carried forward"
+            exit 0
+          }
+
+          fail_gate() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          if [ -n "$(find_comment_id "$DONE_MARKER" || true)" ]; then
+            succeed "First-pass done marker present. Gate is green (carry forward)."
+          fi
+
+          if [ -n "$(find_comment_id "$ERROR_MARKER" || true)" ]; then
+            fail_gate "First-pass finished without a usable verdict (error). Gate stays red."
+          fi
+
+          if [ "$IS_DRAFT" = "true" ]; then
+            fail_gate "Draft PR: first-pass has not run. Mark ready for review to start it."
+          fi
+
+          case "$FIRST_PASS_RESULT" in
+            success)
+              if [ -n "$(find_comment_id "$DONE_MARKER" || true)" ]; then
+                succeed "First-pass job succeeded and done marker is present."
+              fi
+              fail_gate "First-pass job succeeded but no done marker (missing usable verdict)."
+              ;;
+            failure|cancelled)
+              fail_gate "First-pass job result is ${FIRST_PASS_RESULT}."
+              ;;
+          esac
+
+          # synchronize (or any run where first-pass was skipped):
+          # stay pending while the opening review may still be running.
+          echo "Waiting for first-pass done marker (up to 30 minutes)."
+          for _ in $(seq 1 90); do
+            sleep 20
+            if [ -n "$(find_comment_id "$DONE_MARKER" || true)" ]; then
+              succeed "First-pass done marker appeared. Gate is green."
+            fi
+            if [ -n "$(find_comment_id "$ERROR_MARKER" || true)" ]; then
+              fail_gate "First-pass finished without a usable verdict while the gate was waiting."
+            fi
+          done
+          fail_gate "Timed out waiting for first-pass completion. Gate stays red."
