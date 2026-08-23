@@ -4,7 +4,7 @@
 #
 #   jobs:
 #     review:
-#       uses: RetireGolden/.github/.github/workflows/grok-code-review.yml@main
+#       uses: RetireGolden/.github/.github/workflows/grok-code-review.yml@<reviewed-40-character-commit>
 #       secrets: inherit
 #       permissions:
 #         contents: read
@@ -34,7 +34,7 @@
 # use github.event.inputs for workflow_call (that context is empty).
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
-#   FlyOverCoderKY/grok-pr-review-action@v1.0.3, grok-4.6,
+#   FlyOverCoderKY/grok-pr-review-action pinned to the reviewed v1.0.3 commit, grok-4.6,
 #   review_scope: full-pr, review_mode: auto, existing per-repo
 #   effort, omit max_turns (action default 50). Job-level concurrency
 #   group is per-PR; cancel-in-progress is false so a later
@@ -59,8 +59,9 @@
 #   with a notice and spends no xAI tokens. After first-pass
 #   succeeds, job-level concurrency cancels older follow-ups so rapid
 #   Codex pushes keep only the latest incremental review.
-#   Pin the immutable v1.0.3 tag until after smoke; do not use @v1
-#   or @main yet. pegma-dev is intentionally not switched yet.
+#   Pin both this reusable workflow and the reviewed v1.0.3 action to exact
+#   commits; mutable tags and @main must not receive XAI_API_KEY or a
+#   write-capable github.token. pegma-dev is intentionally not switched yet.
 #
 # Merge gate (grok-first-pass-gate): always runs on pull_request
 #   (and workflow_dispatch) so the check name is stable for branch
@@ -218,7 +219,7 @@ jobs:
       # A blank max_turns input would override that default to empty.
       - name: Run Grok first-pass review
         id: grok_first
-        uses: FlyOverCoderKY/grok-pr-review-action@v1.0.3
+        uses: FlyOverCoderKY/grok-pr-review-action@3d01b16f457318ea5965d6a1558a0e67ee1a1fdf # v1.0.3
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
@@ -449,7 +450,7 @@ jobs:
       - name: Run Grok follow-up review
         id: grok_followup
         if: steps.first_pass.outputs.ready == 'true'
-        uses: FlyOverCoderKY/grok-pr-review-action@v1.0.3
+        uses: FlyOverCoderKY/grok-pr-review-action@3d01b16f457318ea5965d6a1558a0e67ee1a1fdf # v1.0.3
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
