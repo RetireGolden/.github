@@ -48,6 +48,15 @@
 #   them with github.token). A matching comment from any other login
 #   is ignored by the gate and by follow-up.
 #
+# Embedded-diff cap (max_diff_kb): org default is 1024. The action
+#   default is 300, which truncated Pro #202's 611 KB full-pr diff
+#   and dropped a file that was actually in the PR from the embed
+#   (src/main/library/windows-durable-move.ts). Grok still read the
+#   file with tools; the parser fail-closed the whole review
+#   (verdict=error), including recovered in-diff findings. Callers
+#   may override via the workflow_call input. Do not change the
+#   action's fail-closed out-of-diff parser.
+#
 # Follow-up (synchronize): same action and grok-4.6, review_scope:
 #   latest-commit, effort=low, max_turns=30. Do not set verify_model
 #   (keep verify on grok-4.6 for xAI prompt-cache reuse). The
@@ -117,6 +126,11 @@ on:
         description: PR number to review when the caller is not a pull_request event
         required: false
         type: string
+      max_diff_kb:
+        description: "Embedded-diff cap in KB for grok-pr-review-action. Org default 1024 (action default 300 truncated Pro #202's 611 KB full-pr diff)."
+        required: false
+        type: string
+        default: "1024"
     secrets:
       XAI_API_KEY:
         description: "Existing org xAI API key. Callers should pass secrets: inherit."
@@ -233,6 +247,7 @@ jobs:
           roast_level: professional
           fail_on: never
           status_comments: "true"
+          max_diff_kb: ${{ inputs.max_diff_kb || '1024' }}
 
       - name: Record first-pass marker
         if: always() && !cancelled()
@@ -465,6 +480,7 @@ jobs:
           roast_level: professional
           fail_on: never
           status_comments: "true"
+          max_diff_kb: ${{ inputs.max_diff_kb || '1024' }}
 
       - name: Summary
         if: always()
