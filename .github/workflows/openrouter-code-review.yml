@@ -127,12 +127,33 @@ jobs:
           echo "::error::OPENROUTER_API_KEY is empty. This workflow authenticates only against openrouter.ai. Callers must pass OPENROUTER_API_KEY explicitly."
           exit 1
 
+      - name: Resolve PR head SHA
+        id: head
+        env:
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::Missing PR number; cannot resolve PR head SHA."
+            exit 1
+          fi
+          HEAD_SHA="${EVENT_HEAD_SHA:-}"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          fi
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not resolve PR head SHA for PR ${PR_NUMBER}."
+            exit 1
+          fi
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
       - name: Checkout PR head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ steps.head.outputs.sha }}
 
       - name: Set per-repo review policy
         id: policy
@@ -244,12 +265,33 @@ jobs:
           echo "::error::OPENROUTER_API_KEY is empty. This workflow authenticates only against openrouter.ai. Callers must pass OPENROUTER_API_KEY explicitly."
           exit 1
 
+      - name: Resolve PR head SHA
+        id: head
+        env:
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::Missing PR number; cannot resolve PR head SHA."
+            exit 1
+          fi
+          HEAD_SHA="${EVENT_HEAD_SHA:-}"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          fi
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not resolve PR head SHA for PR ${PR_NUMBER}."
+            exit 1
+          fi
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
       - name: Checkout PR head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ steps.head.outputs.sha }}
 
       - name: Set per-repo review policy
         id: policy
