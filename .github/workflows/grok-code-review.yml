@@ -34,8 +34,8 @@
 # use github.event.inputs for workflow_call (that context is empty).
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
-#   FlyOverCoderKY/grok-pr-review-action pinned to the post-#12 commit
-#   (out-of-diff citations allowed), grok-4.6,
+#   FlyOverCoderKY/grok-pr-review-action pinned to v1.0.5
+#   (keep findings on coverage-count mismatch), grok-4.6,
 #   review_scope: full-pr, review_mode: auto, existing per-repo
 #   effort, omit max_turns (action default 50). Job-level concurrency
 #   group is per-PR; cancel-in-progress is false so a later
@@ -44,7 +44,10 @@
 #   cancelling. When the action returns a real verdict
 #   (clean | issues | partial), the job writes a durable PR comment
 #   containing <!-- grok-org-first-pass:done --> and posts commit
-#   status context grok-first-pass on the head SHA. Marker comments
+#   status context grok-first-pass on the PR head SHA (dispatch
+#   resolves head via the PR API, not github.sha). The recorder
+#   resolves head itself so a missing XAI_API_KEY still writes the
+#   error marker. Marker comments
 #   are only trusted from github-actions[bot] (this workflow posts
 #   them with github.token). A matching comment from any other login
 #   is ignored by the gate and by follow-up.
@@ -55,9 +58,10 @@
 #   (src/main/library/windows-durable-move.ts). Grok still read the
 #   file with tools; the parser fail-closed the whole review
 #   (verdict=error), including recovered in-diff findings. Callers
-#   may override via the workflow_call input. The post-#12 action pin
+#   may override via the workflow_call input. The v1.0.5 action pin
 #   keeps findings that cite files outside the embed (stale docs /
-#   blast radius) instead of verdict=error.
+#   blast radius) and recovered findings when coverage counts mismatch
+#   instead of verdict=error.
 #
 # Follow-up (synchronize): same action and grok-4.6, review_scope:
 #   latest-commit, effort=low, max_turns=30. Do not set verify_model
@@ -70,8 +74,8 @@
 #   with a notice and spends no xAI tokens. After first-pass
 #   succeeds, job-level concurrency cancels older follow-ups so rapid
 #   Codex pushes keep only the latest incremental review.
-#   Pin both this reusable workflow and the post-#12 action (out-of-diff
-#   citations allowed) to exact
+#   Pin both this reusable workflow and the v1.0.5 action (keep findings
+#   on coverage-count mismatch) to exact
 #   commits; mutable tags and @main must not receive XAI_API_KEY or a
 #   write-capable github.token. pegma-dev is intentionally not switched yet.
 #
@@ -176,7 +180,6 @@ jobs:
     env:
       XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
       PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Require XAI_API_KEY
@@ -185,12 +188,33 @@ jobs:
           echo "::error::XAI_API_KEY is empty. This workflow uses only the org API key against api.x.ai; SuperGrok is not a fallback."
           exit 1
 
+      - name: Resolve PR head SHA
+        id: head
+        env:
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::Missing PR number; cannot resolve PR head SHA."
+            exit 1
+          fi
+          HEAD_SHA="${EVENT_HEAD_SHA:-}"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          fi
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not resolve PR head SHA for PR ${PR_NUMBER}."
+            exit 1
+          fi
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "HEAD_SHA=$HEAD_SHA" >> "$GITHUB_ENV"
+
       - name: Checkout PR head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ steps.head.outputs.sha }}
 
       - name: Set per-repo review policy
         id: policy
@@ -236,7 +260,7 @@ jobs:
       # A blank max_turns input would override that default to empty.
       - name: Run Grok first-pass review
         id: grok_first
-        uses: FlyOverCoderKY/grok-pr-review-action@9e93ee02562a5f21ed7732ed2b7ea94982fe5618 # post-#12 (out-of-diff citations allowed)
+        uses: FlyOverCoderKY/grok-pr-review-action@3989e7854808f4d9f48e4742a1419148d9aab3fc # v1.0.5 (keep findings on coverage-count mismatch)
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
@@ -260,6 +284,7 @@ jobs:
           ISSUE_COUNT: ${{ steps.grok_first.outputs.issue_count }}
           REVIEW_URL: ${{ steps.grok_first.outputs.review_url }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           DONE_MARKER='<!-- grok-org-first-pass:done -->'
@@ -267,6 +292,16 @@ jobs:
           if [ -z "${PR_NUMBER:-}" ]; then
             echo "::error::Missing PR number; cannot write first-pass marker."
             exit 1
+          fi
+
+          # Resolve here so a failed earlier step (empty XAI_API_KEY
+          # skips Resolve) still writes the error marker with the PR head.
+          HEAD_SHA="${HEAD_SHA:-}"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="${EVENT_HEAD_SHA:-}"
+          fi
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha || true)"
           fi
 
           # Trust only github-actions[bot] (this workflow's github.token).
@@ -313,7 +348,7 @@ jobs:
 
           if [ "$GROK_OUTCOME" = "success" ] && { [ "$VERDICT" = "clean" ] || [ "$VERDICT" = "issues" ] || [ "$VERDICT" = "partial" ]; }; then
             BODY=$(printf '%s\n\nGrok **first-pass** review completed with verdict `%s`.\n\nFollow-up synchronize reviews wait for this marker. The merge gate `grok-first-pass-gate` stays green after later pushes.\n\n| Field | Value |\n| --- | --- |\n| Verdict | `%s` |\n| Open issues | `%s` |\n| Head | `%s` |\n| Review | %s |\n| Run | %s |\n' \
-              "$DONE_MARKER" "$VERDICT" "$VERDICT" "${ISSUE_COUNT:-}" "$HEAD_SHA" "${REVIEW_URL:-}" "$RUN_URL")
+              "$DONE_MARKER" "$VERDICT" "$VERDICT" "${ISSUE_COUNT:-}" "${HEAD_SHA:-}" "${REVIEW_URL:-}" "$RUN_URL")
             upsert_comment "$DONE_MARKER" "$BODY"
             post_status success "Grok first-pass completed (${VERDICT})"
             echo "Wrote first-pass done marker (verdict=${VERDICT})."
@@ -323,7 +358,7 @@ jobs:
               exit 0
             fi
             BODY=$(printf '%s\n\nGrok **first-pass** did not complete with a usable verdict (`clean` / `issues` / `partial`). The merge gate stays red until a successful first-pass.\n\n| Field | Value |\n| --- | --- |\n| Outcome | `%s` |\n| Verdict | `%s` |\n| Head | `%s` |\n| Run | %s |\n' \
-              "$ERROR_MARKER" "${GROK_OUTCOME:-missing}" "${VERDICT:-missing}" "$HEAD_SHA" "$RUN_URL")
+              "$ERROR_MARKER" "${GROK_OUTCOME:-missing}" "${VERDICT:-missing}" "${HEAD_SHA:-}" "$RUN_URL")
             upsert_comment "$ERROR_MARKER" "$BODY"
             post_status failure "Grok first-pass did not complete (${GROK_OUTCOME:-missing}/${VERDICT:-missing})"
             echo "Wrote first-pass error marker (outcome=${GROK_OUTCOME:-missing} verdict=${VERDICT:-missing})."
@@ -468,7 +503,7 @@ jobs:
       - name: Run Grok follow-up review
         id: grok_followup
         if: steps.first_pass.outputs.ready == 'true'
-        uses: FlyOverCoderKY/grok-pr-review-action@9e93ee02562a5f21ed7732ed2b7ea94982fe5618 # post-#12 (out-of-diff citations allowed)
+        uses: FlyOverCoderKY/grok-pr-review-action@3989e7854808f4d9f48e4742a1419148d9aab3fc # v1.0.5 (keep findings on coverage-count mismatch)
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
@@ -529,7 +564,7 @@ jobs:
     timeout-minutes: 40
     env:
       PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       FIRST_PASS_RESULT: ${{ needs.grok-first-pass.result }}
       IS_DRAFT: ${{ github.event.pull_request.draft || false }}
       GH_TOKEN: ${{ github.token }}
@@ -551,6 +586,11 @@ jobs:
           if [ -z "${PR_NUMBER:-}" ]; then
             echo "::error::grok-first-pass-gate: missing PR number."
             exit 1
+          fi
+
+          HEAD_SHA="${EVENT_HEAD_SHA:-}"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha || true)"
           fi
 
           # Trust only github-actions[bot] (this workflow's github.token).
