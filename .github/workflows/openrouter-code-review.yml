@@ -1,0 +1,374 @@
+# Sibling reusable OpenRouter PR review next to grok-code-review.yml.
+# Same per-repo effort and custom_instructions so the bake-off compares
+# harness/API, not a different prompt. Not a merge of the Grok workflow.
+#
+# This is not a merge gate. Do not add OpenRouter as a required check
+# and do not clone grok-first-pass-gate. The Grok gate remains
+# `review / grok-first-pass-gate`. Job ids here are
+# openrouter-first-pass and openrouter-follow-up — never `review`.
+#
+# Target repos invoke this file via a thin caller after this file
+# merges, pinned to a reviewed commit. Example:
+#
+#   jobs:
+#     openrouter:
+#       uses: RetireGolden/.github/.github/workflows/openrouter-code-review.yml@<reviewed-40-character-commit>
+#       secrets:
+#         OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+#       permissions:
+#         contents: read
+#         pull-requests: write
+#
+# Callers must pass OPENROUTER_API_KEY explicitly. Do not use
+# secrets: inherit — product repos hold deploy/CLA/GPG secrets that
+# must not be forwarded into this review workflow.
+#
+# Do not add workflow-level concurrency with cancel-in-progress on the
+# thin caller. That cancels the whole reusable run, including an
+# in-progress first-pass. Job-level groups below use only
+# openrouter-* names. Never cancel grok-* concurrency groups.
+#
+# github.event_name inside a called workflow is the caller's event
+# (usually pull_request), not workflow_call. github.event.action is
+# opened / synchronize / reopened / ready_for_review. Do not treat
+# workflow_call as first-pass by default. Read PR number from the
+# caller event first; use inputs.pr_number for dispatch/call. Do not
+# use github.event.inputs for workflow_call (that context is empty).
+#
+# First-pass (opened / reopened / ready_for_review / workflow_dispatch):
+#   FlyOverCoderKY/openrouter-pr-review-action pinned to v1.0.0,
+#   single lane models: x-ai/grok-4.6 (judge skipped),
+#   review_scope: full-pr, review_mode: auto, existing per-repo
+#   effort. Job-level concurrency group is per-PR; cancel-in-progress
+#   is false so a later synchronize cannot cancel this review.
+#
+# Follow-up (synchronize): same action and single lane, review_scope:
+#   latest-commit, review_mode: auto, effort=low. Job-level concurrency
+#   cancels older follow-ups only. Distinct from first-pass and from
+#   every grok-* group.
+#
+# Drafts never run on pull_request. The review-job if still refuses
+# NO SCAN repos even if a caller or ruleset would otherwise fire.
+# This repo (RetireGolden/.github) is NO SCAN — do not add a caller
+# workflow here. Thin callers come after this reusable file merges.
+#
+# Secrets:
+#   OPENROUTER_API_KEY — required at runtime for review jobs. Pass it
+#     as env on the action steps (not as an action input). This
+#     workflow never reads XAI_API_KEY.
+name: OpenRouter code review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # Optional manual re-run from the Actions tab on a PR's head repo
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to review
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      pr_number:
+        description: PR number to review when the caller is not a pull_request event
+        required: false
+        type: string
+      max_diff_kb:
+        description: "Embedded-diff cap in KB for openrouter-pr-review-action. Org default 1024 (action default 300)."
+        required: false
+        type: string
+        default: "1024"
+    secrets:
+      OPENROUTER_API_KEY:
+        description: "Org OpenRouter API key. Callers must pass this secret explicitly. Do not use secrets: inherit (product repos hold deploy/CLA/GPG secrets)."
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  openrouter-first-pass:
+    name: OpenRouter first-pass review
+    # First-pass is sacred. Job-level concurrency with
+    # cancel-in-progress: false means synchronize cannot cancel this
+    # job. A second first-pass for the same PR queues.
+    # Group is openrouter-first-pass-*, never grok-*.
+    concurrency:
+      group: openrouter-first-pass-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+      cancel-in-progress: false
+    # NO SCAN repos are skipped entirely, even if a caller or ruleset
+    # would otherwise fire. Still skip drafts on pull_request.
+    # workflow_dispatch remains allowed (first-pass).
+    # Do not treat workflow_call as a run or first-pass discriminator:
+    # github.event_name inside a called workflow is the caller's event
+    # (usually pull_request). Pass type is github.event.action.
+    if: >-
+      github.repository != 'RetireGolden/.github' &&
+      github.repository != 'RetireGolden/cla-signatures' &&
+      github.repository != 'RetireGolden/RetireBench-private' &&
+      github.repository != 'RetireGolden/RetireGolden-Docs' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'pull_request' &&
+        !github.event.pull_request.draft &&
+        (github.event.action == 'opened' ||
+         github.event.action == 'reopened' ||
+         github.event.action == 'ready_for_review')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+    steps:
+      - name: Require OPENROUTER_API_KEY
+        if: env.OPENROUTER_API_KEY == ''
+        run: |
+          echo "::error::OPENROUTER_API_KEY is empty. This workflow authenticates only against openrouter.ai. Callers must pass OPENROUTER_API_KEY explicitly."
+          exit 1
+
+      - name: Resolve PR head SHA
+        id: head
+        env:
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::Missing PR number; cannot resolve PR head SHA."
+            exit 1
+          fi
+          HEAD_SHA="${EVENT_HEAD_SHA:-}"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          fi
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not resolve PR head SHA for PR ${PR_NUMBER}."
+            exit 1
+          fi
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ steps.head.outputs.sha }}
+
+      - name: Set per-repo review policy
+        id: policy
+        run: |
+          case "$GITHUB_REPOSITORY" in
+            RetireGolden/RetireGolden)
+              echo "effort=high" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "On a calculation/logic diff, flag it if there is no unit test, or if the test only mirrors the new code with no citable source (statute subparagraph + what it requires, IRS pub, or DOCS/domain). A green test that only mirrors the new code does not count. Fixtures must discriminate between plausible statutory readings. Keep engine vs UI money-math leaks, CLA/commit identity, and no private planning. Still obey AGENTS.md."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/RetireGolden-MCP)
+              echo "effort=high" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Focus on tool/schema contracts, no invented tax or statute behavior, auth/secrets handling, CLA/commit identity, and public-copy. Obey AGENTS.md."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro|RetireGolden/RetireBench)
+              echo "effort=medium" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Major issues and security only. This is not a full AGENTS.md audit."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              # Empty effort = grok CLI default, which can be high.
+              # Unlisted repos must not silently inherit HIGH.
+              echo "effort=low" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "This repository is not on the HIGH or MEDIUM Grok review list. Do not run a high-effort or full AGENTS.md audit. Flag only obvious defects and security issues."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Run OpenRouter first-pass review
+        id: openrouter_first
+        uses: FlyOverCoderKY/openrouter-pr-review-action@034e7869ea3e73756dae4a50836093b3557b6e6b # v1.0.0
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        with:
+          github_token: ${{ github.token }}
+          pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+          models: x-ai/grok-4.6
+          effort: ${{ steps.policy.outputs.effort }}
+          review_scope: full-pr
+          review_mode: auto
+          custom_instructions: ${{ steps.policy.outputs.custom_instructions }}
+          roast_level: professional
+          fail_on: never
+          status_comments: "true"
+          max_diff_kb: ${{ inputs.max_diff_kb || '1024' }}
+
+      - name: Summary
+        if: always()
+        env:
+          EFFORT: ${{ steps.policy.outputs.effort }}
+          VERDICT: ${{ steps.openrouter_first.outputs.verdict }}
+          ISSUES: ${{ steps.openrouter_first.outputs.issue_count }}
+          BUGS: ${{ steps.openrouter_first.outputs.bug_count }}
+          REVIEW: ${{ steps.openrouter_first.outputs.review_url }}
+        run: |
+          {
+            echo "### OpenRouter code review"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Pass | \`first-pass\` |"
+            echo "| Models | \`x-ai/grok-4.6\` |"
+            echo "| Effort | \`$EFFORT\` |"
+            echo "| Verdict | \`$VERDICT\` |"
+            echo "| Open issues | \`$ISSUES\` |"
+            echo "| Open bugs | \`$BUGS\` |"
+            echo "| Review | $REVIEW"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  openrouter-follow-up:
+    name: OpenRouter follow-up review
+    # Rapid synchronize events cancel older follow-ups only.
+    # This group is distinct from first-pass and from every grok-*
+    # group, so pushes cannot cancel the opening Grok or OpenRouter
+    # first-pass reviews.
+    concurrency:
+      group: openrouter-follow-up-${{ github.repository }}-${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+      cancel-in-progress: true
+    if: >-
+      github.repository != 'RetireGolden/.github' &&
+      github.repository != 'RetireGolden/cla-signatures' &&
+      github.repository != 'RetireGolden/RetireBench-private' &&
+      github.repository != 'RetireGolden/RetireGolden-Docs' &&
+      github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      github.event.action == 'synchronize'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+    steps:
+      - name: Require OPENROUTER_API_KEY
+        if: env.OPENROUTER_API_KEY == ''
+        run: |
+          echo "::error::OPENROUTER_API_KEY is empty. This workflow authenticates only against openrouter.ai. Callers must pass OPENROUTER_API_KEY explicitly."
+          exit 1
+
+      - name: Resolve PR head SHA
+        id: head
+        env:
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::Missing PR number; cannot resolve PR head SHA."
+            exit 1
+          fi
+          HEAD_SHA="${EVENT_HEAD_SHA:-}"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)"
+          fi
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not resolve PR head SHA for PR ${PR_NUMBER}."
+            exit 1
+          fi
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ steps.head.outputs.sha }}
+
+      - name: Set per-repo review policy
+        id: policy
+        run: |
+          case "$GITHUB_REPOSITORY" in
+            RetireGolden/RetireGolden)
+              echo "effort=high" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "On a calculation/logic diff, flag it if there is no unit test, or if the test only mirrors the new code with no citable source (statute subparagraph + what it requires, IRS pub, or DOCS/domain). A green test that only mirrors the new code does not count. Fixtures must discriminate between plausible statutory readings. Keep engine vs UI money-math leaks, CLA/commit identity, and no private planning. Still obey AGENTS.md."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/RetireGolden-MCP)
+              echo "effort=high" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Focus on tool/schema contracts, no invented tax or statute behavior, auth/secrets handling, CLA/commit identity, and public-copy. Obey AGENTS.md."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro|RetireGolden/RetireBench)
+              echo "effort=medium" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Major issues and security only. This is not a full AGENTS.md audit."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              # Empty effort = grok CLI default, which can be high.
+              # Unlisted repos must not silently inherit HIGH.
+              echo "effort=low" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "This repository is not on the HIGH or MEDIUM Grok review list. Do not run a high-effort or full AGENTS.md audit. Flag only obvious defects and security issues."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Run OpenRouter follow-up review
+        id: openrouter_followup
+        uses: FlyOverCoderKY/openrouter-pr-review-action@034e7869ea3e73756dae4a50836093b3557b6e6b # v1.0.0
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        with:
+          github_token: ${{ github.token }}
+          pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+          models: x-ai/grok-4.6
+          effort: low
+          review_scope: latest-commit
+          review_mode: auto
+          custom_instructions: ${{ steps.policy.outputs.custom_instructions }}
+          roast_level: professional
+          fail_on: never
+          status_comments: "true"
+          max_diff_kb: ${{ inputs.max_diff_kb || '1024' }}
+
+      - name: Summary
+        if: always()
+        env:
+          VERDICT: ${{ steps.openrouter_followup.outputs.verdict }}
+          ISSUES: ${{ steps.openrouter_followup.outputs.issue_count }}
+          BUGS: ${{ steps.openrouter_followup.outputs.bug_count }}
+          REVIEW: ${{ steps.openrouter_followup.outputs.review_url }}
+        run: |
+          {
+            echo "### OpenRouter code review"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Pass | \`follow-up\` |"
+            echo "| Models | \`x-ai/grok-4.6\` |"
+            echo "| Effort | \`low\` |"
+            echo "| Verdict | \`$VERDICT\` |"
+            echo "| Open issues | \`$ISSUES\` |"
+            echo "| Open bugs | \`$BUGS\` |"
+            echo "| Review | $REVIEW"
+          } >> "$GITHUB_STEP_SUMMARY"
