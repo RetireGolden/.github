@@ -36,7 +36,7 @@
 # use github.event.inputs for workflow_call (that context is empty).
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
-#   FlyOverCoderKY/openrouter-pr-review-action pinned to v1.1.0,
+#   FlyOverCoderKY/openrouter-pr-review-action pinned to v1.2.0,
 #   single lane models: x-ai/grok-4.6 (judge skipped),
 #   review_scope: full-pr, review_mode: auto, existing per-repo
 #   effort, max_tool_turns: "50". The action default is now 50
@@ -45,13 +45,25 @@
 #   max_turns=50 finding a real docsConsistency miss). Keep
 #   passing 50. Job-level concurrency group is per-PR;
 #   cancel-in-progress is false so a later synchronize cannot
-#   cancel this review.
+#   cancel this review. As of v1.2.0 the first-pass seeds a review
+#   loop: a hidden ledger in the bot's review body plus inline
+#   or-finding comments.
 #
 # Follow-up (synchronize): same action and single lane, review_scope:
 #   latest-commit, review_mode: auto, effort=low, max_tool_turns: "30"
 #   (Grok follow-up budget). Job-level concurrency cancels older
 #   follow-ups only. Distinct from first-pass and from every grok-*
 #   group.
+#
+#   As of v1.2.0 a synchronize follow-up is a VERIFY round: it diffs
+#   from the ledger's last reviewed SHA (cancelled runs cannot skip
+#   commits), adjudicates carried findings via resolutions, and
+#   fails closed with "run an initial full-PR review first" when no
+#   ledger exists yet (a push that outruns the opening first-pass,
+#   or a PR opened before this pin landed). That red job spends no
+#   OpenRouter tokens; dispatch a first-pass (or push after it
+#   completes) to seed the loop. Marker-based follow-up gating like
+#   grok-code-review.yml's is planned but not yet added here.
 #
 # Drafts never run on pull_request. The review-job if still refuses
 # NO SCAN repos even if a caller or ruleset would otherwise fire.
@@ -205,7 +217,7 @@ jobs:
       # as of v1.1.0; still pass 50 so a blank input cannot override.
       - name: Run OpenRouter first-pass review
         id: openrouter_first
-        uses: FlyOverCoderKY/openrouter-pr-review-action@2d338f42321747984e0088ca42ce635dcf605242 # v1.1.0
+        uses: FlyOverCoderKY/openrouter-pr-review-action@407cce73e2012af0b47b56b6f2da580e9eadb8fc # v1.2.0 (review loop, live-smoked on its own PR #5)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -346,7 +358,7 @@ jobs:
       # match the Grok follow-up budget.
       - name: Run OpenRouter follow-up review
         id: openrouter_followup
-        uses: FlyOverCoderKY/openrouter-pr-review-action@2d338f42321747984e0088ca42ce635dcf605242 # v1.1.0
+        uses: FlyOverCoderKY/openrouter-pr-review-action@407cce73e2012af0b47b56b6f2da580e9eadb8fc # v1.2.0 (review loop, live-smoked on its own PR #5)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
