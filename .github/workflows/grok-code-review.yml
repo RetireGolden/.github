@@ -45,7 +45,9 @@
 #   (clean | issues | partial), the job writes a durable PR comment
 #   containing <!-- grok-org-first-pass:done --> and posts commit
 #   status context grok-first-pass on the PR head SHA (dispatch
-#   resolves head via the PR API, not github.sha). Marker comments
+#   resolves head via the PR API, not github.sha). The recorder
+#   resolves head itself so a missing XAI_API_KEY still writes the
+#   error marker. Marker comments
 #   are only trusted from github-actions[bot] (this workflow posts
 #   them with github.token). A matching comment from any other login
 #   is ignored by the gate and by follow-up.
@@ -282,6 +284,7 @@ jobs:
           ISSUE_COUNT: ${{ steps.grok_first.outputs.issue_count }}
           REVIEW_URL: ${{ steps.grok_first.outputs.review_url }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           DONE_MARKER='<!-- grok-org-first-pass:done -->'
@@ -289,6 +292,16 @@ jobs:
           if [ -z "${PR_NUMBER:-}" ]; then
             echo "::error::Missing PR number; cannot write first-pass marker."
             exit 1
+          fi
+
+          # Resolve here so a failed earlier step (empty XAI_API_KEY
+          # skips Resolve) still writes the error marker with the PR head.
+          HEAD_SHA="${HEAD_SHA:-}"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="${EVENT_HEAD_SHA:-}"
+          fi
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha || true)"
           fi
 
           # Trust only github-actions[bot] (this workflow's github.token).
@@ -335,7 +348,7 @@ jobs:
 
           if [ "$GROK_OUTCOME" = "success" ] && { [ "$VERDICT" = "clean" ] || [ "$VERDICT" = "issues" ] || [ "$VERDICT" = "partial" ]; }; then
             BODY=$(printf '%s\n\nGrok **first-pass** review completed with verdict `%s`.\n\nFollow-up synchronize reviews wait for this marker. The merge gate `grok-first-pass-gate` stays green after later pushes.\n\n| Field | Value |\n| --- | --- |\n| Verdict | `%s` |\n| Open issues | `%s` |\n| Head | `%s` |\n| Review | %s |\n| Run | %s |\n' \
-              "$DONE_MARKER" "$VERDICT" "$VERDICT" "${ISSUE_COUNT:-}" "$HEAD_SHA" "${REVIEW_URL:-}" "$RUN_URL")
+              "$DONE_MARKER" "$VERDICT" "$VERDICT" "${ISSUE_COUNT:-}" "${HEAD_SHA:-}" "${REVIEW_URL:-}" "$RUN_URL")
             upsert_comment "$DONE_MARKER" "$BODY"
             post_status success "Grok first-pass completed (${VERDICT})"
             echo "Wrote first-pass done marker (verdict=${VERDICT})."
@@ -345,7 +358,7 @@ jobs:
               exit 0
             fi
             BODY=$(printf '%s\n\nGrok **first-pass** did not complete with a usable verdict (`clean` / `issues` / `partial`). The merge gate stays red until a successful first-pass.\n\n| Field | Value |\n| --- | --- |\n| Outcome | `%s` |\n| Verdict | `%s` |\n| Head | `%s` |\n| Run | %s |\n' \
-              "$ERROR_MARKER" "${GROK_OUTCOME:-missing}" "${VERDICT:-missing}" "$HEAD_SHA" "$RUN_URL")
+              "$ERROR_MARKER" "${GROK_OUTCOME:-missing}" "${VERDICT:-missing}" "${HEAD_SHA:-}" "$RUN_URL")
             upsert_comment "$ERROR_MARKER" "$BODY"
             post_status failure "Grok first-pass did not complete (${GROK_OUTCOME:-missing}/${VERDICT:-missing})"
             echo "Wrote first-pass error marker (outcome=${GROK_OUTCOME:-missing} verdict=${VERDICT:-missing})."
