@@ -36,14 +36,16 @@
 # use github.event.inputs for workflow_call (that context is empty).
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
-#   FlyOverCoderKY/openrouter-pr-review-action pinned to v1.0.0,
+#   FlyOverCoderKY/openrouter-pr-review-action pinned to v1.1.0,
 #   single lane models: x-ai/grok-4.6 (judge skipped),
 #   review_scope: full-pr, review_mode: auto, existing per-repo
-#   effort, max_tool_turns: "50". The action default is 8; omitting
-#   this input starved the live bake-off (RetireGolden#304: 3.7s /
-#   0 findings vs Grok max_turns=50 finding a real docsConsistency
-#   miss). Job-level concurrency group is per-PR; cancel-in-progress
-#   is false so a later synchronize cannot cancel this review.
+#   effort, max_tool_turns: "50". The action default is now 50
+#   (was 8). Omitting this input starved the live bake-off on
+#   v1.0.0 (RetireGolden#304: 3.7s / 0 findings vs Grok
+#   max_turns=50 finding a real docsConsistency miss). Keep
+#   passing 50. Job-level concurrency group is per-PR;
+#   cancel-in-progress is false so a later synchronize cannot
+#   cancel this review.
 #
 # Follow-up (synchronize): same action and single lane, review_scope:
 #   latest-commit, review_mode: auto, effort=low, max_tool_turns: "30"
@@ -199,12 +201,11 @@ jobs:
               ;;
           esac
 
-      # First-pass must pass max_tool_turns. The pinned action default
-      # is 8; Grok first-pass uses 50. A blank input would override
-      # the default to empty.
+      # First-pass must pass max_tool_turns. The action default is 50
+      # as of v1.1.0; still pass 50 so a blank input cannot override.
       - name: Run OpenRouter first-pass review
         id: openrouter_first
-        uses: FlyOverCoderKY/openrouter-pr-review-action@034e7869ea3e73756dae4a50836093b3557b6e6b # v1.0.0
+        uses: FlyOverCoderKY/openrouter-pr-review-action@2d338f42321747984e0088ca42ce635dcf605242 # v1.1.0
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -345,7 +346,7 @@ jobs:
       # match the Grok follow-up budget.
       - name: Run OpenRouter follow-up review
         id: openrouter_followup
-        uses: FlyOverCoderKY/openrouter-pr-review-action@034e7869ea3e73756dae4a50836093b3557b6e6b # v1.0.0
+        uses: FlyOverCoderKY/openrouter-pr-review-action@2d338f42321747984e0088ca42ce635dcf605242 # v1.1.0
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
