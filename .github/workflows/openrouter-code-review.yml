@@ -57,13 +57,26 @@
 #
 #   As of v1.2.0 a synchronize follow-up is a VERIFY round: it diffs
 #   from the ledger's last reviewed SHA (cancelled runs cannot skip
-#   commits), adjudicates carried findings via resolutions, and
-#   fails closed with "run an initial full-PR review first" when no
-#   ledger exists yet (a push that outruns the opening first-pass,
-#   or a PR opened before this pin landed). That red job spends no
-#   OpenRouter tokens; dispatch a first-pass (or push after it
-#   completes) to seed the loop. Marker-based follow-up gating like
-#   grok-code-review.yml's is planned but not yet added here.
+#   commits) and adjudicates carried findings via resolutions.
+#
+#   Follow-up gating: before spending tokens, the follow-up job checks
+#   whether a review-loop ledger exists on the PR — the marker the
+#   first-pass publishes inside its own review body, trusted only from
+#   github-actions[bot], which is the exact condition the harness
+#   itself requires. No ledger -> the job SKIPS with a notice (exit 0)
+#   instead of a red fail-closed run. That covers pushes that outrun
+#   the opening first-pass, PRs opened before the v1.2.0 pin, and
+#   GitHub merge-ref hiccups that swallow the opened event entirely
+#   (RetireGolden#319). Seed with a workflow_dispatch first-pass.
+#   Unlike grok-code-review.yml's comment-marker gate, this checks the
+#   ledger itself, so gating can never disagree with what the harness
+#   will accept.
+#
+#   Both review steps carry their own 25-minute timeout (inside the
+#   30-minute job budget) so a hung run fails the step rather than
+#   being job-cancelled; a failure finalizer then repairs the status
+#   comment a dead run would otherwise leave saying "Reviewing…"
+#   forever.
 #
 # Drafts never run on pull_request. The review-job if still refuses
 # NO SCAN repos even if a caller or ruleset would otherwise fire.
@@ -93,10 +106,16 @@ on:
         required: false
         type: string
       max_diff_kb:
-        description: "Embedded-diff cap in KB for openrouter-pr-review-action. Org default 1024 (action default 300)."
+        description: >-
+          Embedded-diff cap in KB for openrouter-pr-review-action. Org
+          default 600 (action default 300). The OpenRouter grok-4.6 route
+          caps requests at 500K tokens: a dense 1024KB embed reached ~510K
+          tokens and errored the whole lane on RetireGolden#315, whereas a
+          truncated diff posts an honest partial verdict. Grok's own
+          workflow keeps 1024 (api.x.ai has more headroom).
         required: false
         type: string
-        default: "1024"
+        default: "600"
     secrets:
       OPENROUTER_API_KEY:
         description: "Org OpenRouter API key. Callers must pass this secret explicitly. Do not use secrets: inherit (product repos hold deploy/CLA/GPG secrets)."
@@ -217,6 +236,7 @@ jobs:
       # as of v1.1.0; still pass 50 so a blank input cannot override.
       - name: Run OpenRouter first-pass review
         id: openrouter_first
+        timeout-minutes: 25
         uses: FlyOverCoderKY/openrouter-pr-review-action@407cce73e2012af0b47b56b6f2da580e9eadb8fc # v1.2.0 (review loop, live-smoked on its own PR #5)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -231,8 +251,37 @@ jobs:
           roast_level: professional
           fail_on: never
           status_comments: "true"
-          max_diff_kb: ${{ inputs.max_diff_kb || '1024' }}
+          max_diff_kb: ${{ inputs.max_diff_kb || '600' }}
           max_tool_turns: "50"
+
+      # The review step has its own timeout so a hung run fails the STEP
+      # (job-level timeout cancellation can skip always()/failure() steps).
+      # Repair the status comment a dead run leaves saying "Reviewing…".
+      - name: Repair the status comment on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            exit 0
+          fi
+          MARKER='<!-- openrouter-pr-review-status -->'
+          BODY="$MARKER
+          OpenRouter review did not complete (step failure or timeout); no review was posted by this run. $RUN_URL"
+          existing="$(MARKER="$MARKER" gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and .body != null and (.body | contains(env.MARKER))) | .id' \
+            | head -n1 || true)"
+          if [ -n "$existing" ]; then
+            jq -n --arg body "$BODY" '{body: $body}' \
+              | gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" --input - > /dev/null
+          else
+            jq -n --arg body "$BODY" '{body: $body}' \
+              | gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - > /dev/null
+          fi
+          echo "Status comment updated to record the incomplete run."
 
       - name: Summary
         if: always()
@@ -280,13 +329,47 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
     steps:
+      # v1.2.0 follow-ups are verify rounds that need the loop ledger the
+      # first-pass publishes inside its own review body. Checking for the
+      # ledger itself (not a separate marker) means this gate can never
+      # disagree with what the harness will accept. Trust only
+      # github-actions[bot]-authored reviews, same as the harness default.
+      - name: Require a seeded review loop
+        id: seeded
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::notice::Skipping OpenRouter follow-up: missing PR number. No OpenRouter spend."
+            exit 0
+          fi
+          # Count matches per page and sum: the pipeline drains every page,
+          # so an early match can never SIGPIPE gh under pipefail (a grep -q
+          # here would close the pipe mid-pagination and read as unseeded).
+          if ! matches="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+              --jq '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- openrouter-review-ledger:v1:")))] | length' \
+              | awk '{sum += $1} END {print sum + 0}')"; then
+            echo "::warning::Could not list PR reviews for the ledger check; skipping the follow-up without spend. Re-run or dispatch a first-pass."
+            exit 0
+          fi
+          if [ "${matches:-0}" -gt 0 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Review-loop ledger found; running the verify round."
+            exit 0
+          fi
+          echo "::notice::Skipping OpenRouter follow-up: no review-loop ledger exists on PR ${PR_NUMBER} (first-pass still running, failed, or never triggered — e.g. a swallowed opened event). Seed with a workflow_dispatch first-pass. No OpenRouter spend."
+
       - name: Require OPENROUTER_API_KEY
-        if: env.OPENROUTER_API_KEY == ''
+        if: steps.seeded.outputs.ready == 'true' && env.OPENROUTER_API_KEY == ''
         run: |
           echo "::error::OPENROUTER_API_KEY is empty. This workflow authenticates only against openrouter.ai. Callers must pass OPENROUTER_API_KEY explicitly."
           exit 1
 
       - name: Resolve PR head SHA
+        if: steps.seeded.outputs.ready == 'true'
         id: head
         env:
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -308,6 +391,7 @@ jobs:
           echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Checkout PR head
+        if: steps.seeded.outputs.ready == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -315,6 +399,7 @@ jobs:
           ref: ${{ steps.head.outputs.sha }}
 
       - name: Set per-repo review policy
+        if: steps.seeded.outputs.ready == 'true'
         id: policy
         run: |
           case "$GITHUB_REPOSITORY" in
@@ -358,6 +443,8 @@ jobs:
       # match the Grok follow-up budget.
       - name: Run OpenRouter follow-up review
         id: openrouter_followup
+        if: steps.seeded.outputs.ready == 'true'
+        timeout-minutes: 25
         uses: FlyOverCoderKY/openrouter-pr-review-action@407cce73e2012af0b47b56b6f2da580e9eadb8fc # v1.2.0 (review loop, live-smoked on its own PR #5)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -372,12 +459,40 @@ jobs:
           roast_level: professional
           fail_on: never
           status_comments: "true"
-          max_diff_kb: ${{ inputs.max_diff_kb || '1024' }}
+          max_diff_kb: ${{ inputs.max_diff_kb || '600' }}
           max_tool_turns: "30"
+
+      # Same step-timeout + finalizer rationale as the first-pass job.
+      - name: Repair the status comment on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_NUMBER:-}" ]; then
+            exit 0
+          fi
+          MARKER='<!-- openrouter-pr-review-status -->'
+          BODY="$MARKER
+          OpenRouter review did not complete (step failure or timeout); no review was posted by this run. $RUN_URL"
+          existing="$(MARKER="$MARKER" gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and .body != null and (.body | contains(env.MARKER))) | .id' \
+            | head -n1 || true)"
+          if [ -n "$existing" ]; then
+            jq -n --arg body "$BODY" '{body: $body}' \
+              | gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" --input - > /dev/null
+          else
+            jq -n --arg body "$BODY" '{body: $body}' \
+              | gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - > /dev/null
+          fi
+          echo "Status comment updated to record the incomplete run."
 
       - name: Summary
         if: always()
         env:
+          SEEDED: ${{ steps.seeded.outputs.ready }}
           VERDICT: ${{ steps.openrouter_followup.outputs.verdict }}
           ISSUES: ${{ steps.openrouter_followup.outputs.issue_count }}
           BUGS: ${{ steps.openrouter_followup.outputs.bug_count }}
@@ -389,6 +504,7 @@ jobs:
             echo "| Field | Value |"
             echo "| --- | --- |"
             echo "| Pass | \`follow-up\` |"
+            echo "| Seeded | \`${SEEDED:-false}\` |"
             echo "| Models | \`x-ai/grok-4.6\` |"
             echo "| Effort | \`low\` |"
             echo "| Verdict | \`$VERDICT\` |"
