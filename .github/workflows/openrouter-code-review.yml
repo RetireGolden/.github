@@ -345,10 +345,17 @@ jobs:
             echo "::notice::Skipping OpenRouter follow-up: missing PR number. No OpenRouter spend."
             exit 0
           fi
-          LEDGER_PREFIX='<!-- openrouter-review-ledger:v1:'
-          if gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-              --jq '.[] | select(.user.login == "github-actions[bot]" and .body != null) | .body' \
-              | grep -Fq "$LEDGER_PREFIX"; then
+          # Count matches per page and sum: the pipeline drains every page,
+          # so an early match can never SIGPIPE gh under pipefail (a grep -q
+          # here would close the pipe mid-pagination and read as unseeded).
+          if ! matches="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+              --jq '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- openrouter-review-ledger:v1:")))] | length' \
+              | awk '{sum += $1} END {print sum + 0}')"; then
+            echo "::warning::Could not list PR reviews for the ledger check; skipping the follow-up without spend. Re-run or dispatch a first-pass."
+            exit 0
+          fi
+          if [ "${matches:-0}" -gt 0 ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
             echo "Review-loop ledger found; running the verify round."
             exit 0
