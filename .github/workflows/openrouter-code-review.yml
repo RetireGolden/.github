@@ -247,7 +247,7 @@ jobs:
       - name: Run OpenRouter first-pass review
         id: openrouter_first
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@960a34df4a9029f7c0267590aeb67405579a35fa # v1.2.4 (recall-safe judge, path profiles, anchor gate)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@2b724b2dac814bfc6695377af0c5fc1b95a1091e # v1.2.5 (cost line, readable findings)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -464,7 +464,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@960a34df4a9029f7c0267590aeb67405579a35fa # v1.2.4 (recall-safe judge, path profiles, anchor gate)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@2b724b2dac814bfc6695377af0c5fc1b95a1091e # v1.2.5 (cost line, readable findings)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
