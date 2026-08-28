@@ -36,7 +36,7 @@
 # use github.event.inputs for workflow_call (that context is empty).
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
-#   FlyOverCoderKY/openrouter-pr-review-action pinned to v1.2.2,
+#   FlyOverCoderKY/openrouter-pr-review-action pinned to v1.2.3,
 #   single lane models: x-ai/grok-4.6 (judge skipped),
 #   review_scope: full-pr, review_mode: auto, existing per-repo
 #   effort, max_tool_turns: "50". The action default is now 50
@@ -237,7 +237,7 @@ jobs:
       - name: Run OpenRouter first-pass review
         id: openrouter_first
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@194f5d5ed617e46b2e75dd06a0802ec71ad2a881 # v1.2.2 (recall promptcraft port + bench-validated, live-smoked on its own PR #7)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@016a254d22dc9ccea7e0ce47f8cd78a9498c7bb4 # v1.2.3 (falsification pass, 2-model A/B validated on its own bench)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -445,7 +445,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@194f5d5ed617e46b2e75dd06a0802ec71ad2a881 # v1.2.2 (recall promptcraft port + bench-validated, live-smoked on its own PR #7)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@016a254d22dc9ccea7e0ce47f8cd78a9498c7bb4 # v1.2.3 (falsification pass, 2-model A/B validated on its own bench)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
