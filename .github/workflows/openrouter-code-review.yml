@@ -37,7 +37,9 @@
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
 #   FlyOverCoderKY/openrouter-pr-review-action pinned to v1.2.4,
-#   single lane models: x-ai/grok-4.6 (judge skipped),
+#   models from the per-repo policy step (single grok lane for most
+#   repos, judge skipped; RetireGolden runs grok+glm two-lane with the
+#   recall-safe judge),
 #   review_scope: full-pr, review_mode: auto, existing per-repo
 #   effort, max_tool_turns: "50". The action default is now 50
 #   (was 8). Omitting this input starved the live bake-off on
@@ -197,6 +199,11 @@ jobs:
         run: |
           case "$GITHUB_REPOSITORY" in
             RetireGolden/RetireGolden)
+              # Two-model roster (first repo flipped, 2026-08-28): grok +
+              # glm-5.3-flash lanes with the recall-safe v1.2.4 judge.
+              # Bench-measured 95% recall / hardest-plant 4-in-5 vs 94% /
+              # 2-in-5 single-lane at ~1.04x cost (action bench/RESULTS.md).
+              echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
               echo "effort=high" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -205,6 +212,7 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               ;;
             RetireGolden/RetireGolden-MCP)
+              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
               echo "effort=high" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -213,6 +221,7 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               ;;
             RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro|RetireGolden/RetireBench)
+              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
               echo "effort=medium" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -223,6 +232,7 @@ jobs:
             *)
               # Empty effort = grok CLI default, which can be high.
               # Unlisted repos must not silently inherit HIGH.
+              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
               echo "effort=low" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -243,7 +253,7 @@ jobs:
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
-          models: x-ai/grok-4.6
+          models: ${{ steps.policy.outputs.models }}
           effort: ${{ steps.policy.outputs.effort }}
           review_scope: full-pr
           review_mode: auto
@@ -286,6 +296,7 @@ jobs:
       - name: Summary
         if: always()
         env:
+          MODELS: ${{ steps.policy.outputs.models }}
           EFFORT: ${{ steps.policy.outputs.effort }}
           VERDICT: ${{ steps.openrouter_first.outputs.verdict }}
           ISSUES: ${{ steps.openrouter_first.outputs.issue_count }}
@@ -298,7 +309,7 @@ jobs:
             echo "| Field | Value |"
             echo "| --- | --- |"
             echo "| Pass | \`first-pass\` |"
-            echo "| Models | \`x-ai/grok-4.6\` |"
+            echo "| Models | \`$MODELS\` |"
             echo "| Effort | \`$EFFORT\` |"
             echo "| Verdict | \`$VERDICT\` |"
             echo "| Open issues | \`$ISSUES\` |"
@@ -404,6 +415,11 @@ jobs:
         run: |
           case "$GITHUB_REPOSITORY" in
             RetireGolden/RetireGolden)
+              # Two-model roster (first repo flipped, 2026-08-28): grok +
+              # glm-5.3-flash lanes with the recall-safe v1.2.4 judge.
+              # Bench-measured 95% recall / hardest-plant 4-in-5 vs 94% /
+              # 2-in-5 single-lane at ~1.04x cost (action bench/RESULTS.md).
+              echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
               echo "effort=high" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -412,6 +428,7 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               ;;
             RetireGolden/RetireGolden-MCP)
+              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
               echo "effort=high" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -420,6 +437,7 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               ;;
             RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro|RetireGolden/RetireBench)
+              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
               echo "effort=medium" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -430,6 +448,7 @@ jobs:
             *)
               # Empty effort = grok CLI default, which can be high.
               # Unlisted repos must not silently inherit HIGH.
+              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
               echo "effort=low" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -451,7 +470,7 @@ jobs:
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
-          models: x-ai/grok-4.6
+          models: ${{ steps.policy.outputs.models }}
           effort: low
           review_scope: latest-commit
           review_mode: auto
@@ -492,6 +511,7 @@ jobs:
       - name: Summary
         if: always()
         env:
+          MODELS: ${{ steps.policy.outputs.models }}
           SEEDED: ${{ steps.seeded.outputs.ready }}
           VERDICT: ${{ steps.openrouter_followup.outputs.verdict }}
           ISSUES: ${{ steps.openrouter_followup.outputs.issue_count }}
@@ -505,7 +525,7 @@ jobs:
             echo "| --- | --- |"
             echo "| Pass | \`follow-up\` |"
             echo "| Seeded | \`${SEEDED:-false}\` |"
-            echo "| Models | \`x-ai/grok-4.6\` |"
+            echo "| Models | \`$MODELS\` |"
             echo "| Effort | \`low\` |"
             echo "| Verdict | \`$VERDICT\` |"
             echo "| Open issues | \`$ISSUES\` |"
