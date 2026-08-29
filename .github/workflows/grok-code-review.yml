@@ -267,7 +267,7 @@ jobs:
       # A blank max_turns input would override that default to empty.
       - name: Run Grok first-pass review
         id: grok_first
-        uses: FlyOverCoderKY/grok-pr-review-action@66fbede531d782287b3603595d8c42da72c71c92 # v1.0.7 (generated-file triage keeps source in the embed)
+        uses: FlyOverCoderKY/grok-pr-review-action@38dcae46b9b383665e513b93dd4fb2feacf95239 # post-v1.0.7 (same-SHA and divergence safeguards)
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
@@ -510,7 +510,7 @@ jobs:
       - name: Run Grok follow-up review
         id: grok_followup
         if: steps.first_pass.outputs.ready == 'true'
-        uses: FlyOverCoderKY/grok-pr-review-action@66fbede531d782287b3603595d8c42da72c71c92 # v1.0.7 (generated-file triage keeps source in the embed)
+        uses: FlyOverCoderKY/grok-pr-review-action@38dcae46b9b383665e513b93dd4fb2feacf95239 # post-v1.0.7 (same-SHA and divergence safeguards)
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:

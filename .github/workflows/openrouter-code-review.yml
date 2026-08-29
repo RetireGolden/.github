@@ -1,11 +1,9 @@
-# Sibling reusable OpenRouter PR review next to grok-code-review.yml.
-# Same per-repo effort and custom_instructions so the bake-off compares
-# harness/API, not a different prompt. Not a merge of the Grok workflow.
+# Primary OpenRouter PR review. This workflow is independent of the Grok
+# workflow: it receives only the OpenRouter secret and never invokes Grok. The stable
+# merge-gate job is `openrouter-first-pass-gate`; with the standard thin-caller
+# job id `review`, branch protection should require:
 #
-# This is not a merge gate. Do not add OpenRouter as a required check
-# and do not clone grok-first-pass-gate. The Grok gate remains
-# `review / grok-first-pass-gate`. Job ids here are
-# openrouter-first-pass and openrouter-follow-up — never `review`.
+#   review / openrouter-first-pass-gate
 #
 # Target repos invoke this file via a thin caller after this file
 # merges, pinned to a reviewed commit. Example:
@@ -18,6 +16,7 @@
 #       permissions:
 #         contents: read
 #         pull-requests: write
+#         statuses: write
 #
 # Callers must pass OPENROUTER_API_KEY explicitly. Do not use
 # secrets: inherit — product repos hold deploy/CLA/GPG secrets that
@@ -88,8 +87,8 @@
 #
 # Secrets:
 #   OPENROUTER_API_KEY — required at runtime for review jobs. Pass it
-#     as env on the action steps (not as an action input). This
-#     workflow never reads XAI_API_KEY.
+#     as env on the action steps (not as an action input). No xAI secret is
+#     declared or read.
 name: OpenRouter code review
 
 on:
@@ -127,10 +126,15 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  statuses: write
 
 jobs:
   openrouter-first-pass:
     name: OpenRouter first-pass review
+    outputs:
+      action_outcome: ${{ steps.openrouter_first.outcome }}
+      verdict: ${{ steps.openrouter_first.outputs.verdict }}
+      review_url: ${{ steps.openrouter_first.outputs.review_url }}
     # First-pass is sacred. Job-level concurrency with
     # cancel-in-progress: false means synchronize cannot cancel this
     # job. A second first-pass for the same PR queues.
@@ -252,7 +256,7 @@ jobs:
       - name: Run OpenRouter first-pass review
         id: openrouter_first
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@8dbd6733e84b31476ba282921c8b5effd4634935 # v1.2.6 (diff-budget triage for dense PRs)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@8d3916e9148b6001f14f7752b9969a165b573160 # v1.2.7 (deadline recovery, convergence, judge hygiene)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -321,6 +325,189 @@ jobs:
             echo "| Open bugs | \`$BUGS\` |"
             echo "| Review | $REVIEW"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Stable merge-gate check name. The standard thin caller job id is
+  # `review`, so the required context is:
+  #   review / openrouter-first-pass-gate
+  # This gate trusts only OpenRouter reviews authored by github-actions[bot].
+  # On synchronize it carries a completed initial review onto the new head;
+  # the follow-up review remains visible but is not allowed to erase proof
+  # that the required full-PR first pass completed.
+  #
+  # Decision table:
+  # - opened/reopened/ready/manual: only this run's successful action output
+  #   plus its exact-current-head published review can pass; an older review
+  #   never masks a failed or stale fresh first pass.
+  # - synchronize: a prior bot-authored initial review may carry only when its
+  #   explicit reviewed commit is the current head or an ancestor of it.
+  # - force-push/divergence: historical carry is rejected; a fresh initial
+  #   OpenRouter review on the new lineage is required.
+  openrouter-first-pass-gate:
+    name: openrouter-first-pass-gate
+    needs: [openrouter-first-pass]
+    if: >-
+      always() &&
+      !cancelled() &&
+      (github.event_name == 'pull_request' ||
+       github.event_name == 'workflow_dispatch')
+    # Deliberately no concurrency group. GitHub keeps only one pending run per
+    # group even when cancel-in-progress is false, so grouping could replace a
+    # pending gate for a different head before it emits a terminal check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
+      EVENT_ACTION: ${{ github.event.action }}
+      EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      IS_DRAFT: ${{ github.event.pull_request.draft || false }}
+      FIRST_PASS_RESULT: ${{ needs.openrouter-first-pass.result }}
+      ACTION_OUTCOME: ${{ needs.openrouter-first-pass.outputs.action_outcome }}
+      VERDICT: ${{ needs.openrouter-first-pass.outputs.verdict }}
+      REVIEW_URL: ${{ needs.openrouter-first-pass.outputs.review_url }}
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Evaluate OpenRouter first-pass gate
+        run: |
+          set -euo pipefail
+
+          case "$GITHUB_REPOSITORY" in
+            RetireGolden/.github|RetireGolden/cla-signatures|RetireGolden/RetireBench-private|RetireGolden/RetireGolden-Docs)
+              echo "NO SCAN repository; openrouter-first-pass-gate succeeds without a review."
+              exit 0
+              ;;
+          esac
+
+          if [ -z "${PR_NUMBER:-}" ]; then
+            echo "::error::openrouter-first-pass-gate: missing PR number."
+            exit 1
+          fi
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "::error::Draft PR: OpenRouter first-pass has not run. Mark it ready for review to start the gate."
+            exit 1
+          fi
+
+          # Resolve the live PR head even for pull_request events. In
+          # particular, workflow_dispatch has no event head and must not turn
+          # green for a review that became stale while the run was executing.
+          HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha || true)"
+          if [ -z "$HEAD_SHA" ]; then
+            HEAD_SHA="${EVENT_HEAD_SHA:-}"
+          fi
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not resolve the current PR head SHA."
+            exit 1
+          fi
+
+          # A carry candidate must be a real bot-authored OpenRouter initial
+          # review. Complete reviews must have the OpenRouter ledger; partials
+          # are ledgerless by design. Both must expose the explicit Commit line,
+          # and that SHA must be identical to or an ancestor of the current
+          # head. The compare check rejects force-pushed/diverged histories.
+          find_review() {
+            local expected_url="${1:-}"
+            local relationship="${2:-lineage}"
+            {
+              while IFS= read -r encoded; do
+                [ -n "$encoded" ] || continue
+                record="$(printf '%s' "$encoded" | base64 --decode)"
+                review_url="$(printf '%s' "$record" | jq -r '.html_url // empty')"
+                body="$(printf '%s' "$record" | jq -r '.body // empty')"
+                reviewed_sha="$(printf '%s\n' "$body" \
+                  | sed -n 's/^\*\*Commit:\*\* `\([0-9a-fA-F]\{40\}\)`[[:space:]]*$/\1/p' \
+                  | head -n1 \
+                  | tr '[:upper:]' '[:lower:]')"
+                [ -n "$review_url" ] && [ -n "$reviewed_sha" ] || continue
+                if [ -n "$expected_url" ] && [ "$review_url" != "$expected_url" ]; then
+                  continue
+                fi
+
+                if [ "$relationship" = "exact" ]; then
+                  [ "$reviewed_sha" = "$HEAD_SHA" ] || continue
+                  compare_status=identical
+                else
+                  compare_status="$(gh api \
+                    "repos/${GITHUB_REPOSITORY}/compare/${reviewed_sha}...${HEAD_SHA}" \
+                    --jq .status 2>/dev/null || true)"
+                fi
+                case "$compare_status" in
+                  identical|ahead)
+                    printf '%s\t%s\n' "$review_url" "$reviewed_sha"
+                    ;;
+                esac
+              done < <(gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+                --jq '.[] | select(
+                  .user.login == "github-actions[bot]" and
+                  .body != null and
+                  (.body | contains("## OpenRouter pull-request review")) and
+                  (.body | contains("**Mode:** `initial`")) and
+                  ((.body | contains("<!-- openrouter-review-ledger:v1:")) or
+                   (.body | contains("**Verdict:** `partial`"))) and
+                  ((.body | contains("**Verdict:** `clean`")) or
+                   (.body | contains("**Verdict:** `issues`")) or
+                   (.body | contains("**Verdict:** `partial`")))
+                ) | {html_url: .html_url, body: .body} | @base64' || true)
+            } | tail -n1
+          }
+
+          carry_status() {
+            local review_url="$1"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+              -f state=success \
+              -f context=openrouter-first-pass \
+              -f description="OpenRouter first-pass completed; carried forward" \
+              -f target_url="${review_url:-$RUN_URL}" > /dev/null
+          }
+
+          succeed() {
+            local review_url="$1"
+            local message="$2"
+            carry_status "$review_url"
+            echo "$message"
+            exit 0
+          }
+
+          if [ "$ACTION_OUTCOME" = "success" ] && \
+             { [ "$VERDICT" = "clean" ] || [ "$VERDICT" = "issues" ] || [ "$VERDICT" = "partial" ]; } && \
+             [ -n "${REVIEW_URL:-}" ]; then
+            # Validate the published artifact itself. Outputs alone can be
+            # stale on workflow_dispatch if the PR head moved mid-run.
+            active="$(find_review "$REVIEW_URL" exact)"
+            if [ -n "$active" ]; then
+              active_url="${active%%$'\t'*}"
+              succeed "$active_url" "The active OpenRouter first-pass published a usable ${VERDICT} review for current head ${HEAD_SHA}."
+            fi
+          fi
+
+          # Historical evidence is never consulted for an active first-pass
+          # event. A failed reopen/ready/manual run must remain failed.
+          if [ "$EVENT_ACTION" != "synchronize" ]; then
+            echo "::error::OpenRouter first-pass did not publish a usable review (job=${FIRST_PASS_RESULT:-missing}, action=${ACTION_OUTCOME:-missing}, verdict=${VERDICT:-missing}, review_url=${REVIEW_URL:-missing})."
+            exit 1
+          fi
+
+          existing="$(find_review "" lineage)"
+          if [ -n "$existing" ]; then
+            existing_url="${existing%%$'\t'*}"
+            existing_sha="${existing#*$'\t'}"
+            succeed "$existing_url" "OpenRouter first-pass at ${existing_sha} is in the current lineage; carried onto ${HEAD_SHA}."
+          fi
+
+          # synchronize can race the opening review. Keep the required check
+          # pending while that first pass may still be publishing.
+          echo "Waiting for a lineage-valid OpenRouter first-pass review (up to 30 minutes)."
+          for _ in $(seq 1 90); do
+            sleep 20
+            existing="$(find_review "" lineage)"
+            if [ -n "$existing" ]; then
+              existing_url="${existing%%$'\t'*}"
+              existing_sha="${existing#*$'\t'}"
+              succeed "$existing_url" "OpenRouter first-pass at ${existing_sha} appeared in the current lineage; carried onto ${HEAD_SHA}."
+            fi
+          done
+          echo "::error::Timed out waiting for a lineage-valid OpenRouter first-pass review. A force-pushed/diverged head requires a fresh full initial review."
+          exit 1
 
   openrouter-follow-up:
     name: OpenRouter follow-up review
@@ -473,7 +660,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@8dbd6733e84b31476ba282921c8b5effd4634935 # v1.2.6 (diff-budget triage for dense PRs)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@8d3916e9148b6001f14f7752b9969a165b573160 # v1.2.7 (deadline recovery, convergence, judge hygiene)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
