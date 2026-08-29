@@ -34,8 +34,8 @@
 # use github.event.inputs for workflow_call (that context is empty).
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
-#   FlyOverCoderKY/grok-pr-review-action pinned to v1.0.6
-#   (truncated dense PRs degrade to partial), grok-4.6,
+#   FlyOverCoderKY/grok-pr-review-action pinned to v1.0.7
+#   (generated-file triage keeps source in the embed), grok-4.6,
 #   review_scope: full-pr, review_mode: auto, existing per-repo
 #   effort, omit max_turns (action default 50). Job-level concurrency
 #   group is per-PR; cancel-in-progress is false so a later
@@ -58,14 +58,17 @@
 #   (src/main/library/windows-durable-move.ts). Grok still read the
 #   file with tools; the parser fail-closed the whole review
 #   (verdict=error), including recovered in-diff findings. Callers
-#   may override via the workflow_call input. The v1.0.6 action pin
+#   may override via the workflow_call input. The v1.0.7 action pin
 #   keeps findings that cite files outside the embed (stale docs /
 #   blast radius) and recovered findings when coverage counts mismatch,
 #   ignores coverage entries for files outside the embed, and degrades
 #   a truncated embed whose coverage cannot be fully validated to a
 #   partial verdict instead of verdict=error, so a dense PR (#108's
 #   1178 KB diff still exceeds the 1024 KB org cap) cannot permanently
-#   red the required gate.
+#   red the required gate. Since v1.0.7 an over-cap diff first stubs
+#   generated/large data files (lock files, vendored paths, data files
+#   over 64 KB) to header-only entries, so hand-written source stays
+#   fully embedded (#108 embeds as 60 KB with every file present).
 #
 # Follow-up (synchronize): same action and grok-4.6, review_scope:
 #   latest-commit, effort=low, max_turns=30. Do not set verify_model
@@ -78,8 +81,8 @@
 #   with a notice and spends no xAI tokens. After first-pass
 #   succeeds, job-level concurrency cancels older follow-ups so rapid
 #   Codex pushes keep only the latest incremental review.
-#   Pin both this reusable workflow and the v1.0.6 action (truncated
-#   dense PRs degrade to partial) to exact
+#   Pin both this reusable workflow and the v1.0.7 action
+#   (generated-file triage) to exact
 #   commits; mutable tags and @main must not receive XAI_API_KEY or a
 #   write-capable github.token. pegma-dev is intentionally not switched yet.
 #
@@ -264,7 +267,7 @@ jobs:
       # A blank max_turns input would override that default to empty.
       - name: Run Grok first-pass review
         id: grok_first
-        uses: FlyOverCoderKY/grok-pr-review-action@4371203892f74d0ca4455647df0fe298f5b04624 # v1.0.6 (truncated dense PRs degrade to partial)
+        uses: FlyOverCoderKY/grok-pr-review-action@66fbede531d782287b3603595d8c42da72c71c92 # v1.0.7 (generated-file triage keeps source in the embed)
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
@@ -507,7 +510,7 @@ jobs:
       - name: Run Grok follow-up review
         id: grok_followup
         if: steps.first_pass.outputs.ready == 'true'
-        uses: FlyOverCoderKY/grok-pr-review-action@4371203892f74d0ca4455647df0fe298f5b04624 # v1.0.6 (truncated dense PRs degrade to partial)
+        uses: FlyOverCoderKY/grok-pr-review-action@66fbede531d782287b3603595d8c42da72c71c92 # v1.0.7 (generated-file triage keeps source in the embed)
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
