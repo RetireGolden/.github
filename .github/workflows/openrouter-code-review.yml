@@ -36,7 +36,8 @@
 # use github.event.inputs for workflow_call (that context is empty).
 #
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
-#   FlyOverCoderKY/openrouter-pr-review-action pinned to v1.2.4,
+#   FlyOverCoderKY/openrouter-pr-review-action (live pin on the
+#   uses: lines below; do not restate the version here),
 #   models from the per-repo policy step (single grok lane for most
 #   repos, judge skipped; RetireGolden runs grok+glm two-lane with the
 #   recall-safe judge),
@@ -247,7 +248,7 @@ jobs:
       - name: Run OpenRouter first-pass review
         id: openrouter_first
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@2b724b2dac814bfc6695377af0c5fc1b95a1091e # v1.2.5 (cost line, readable findings)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@8dbd6733e84b31476ba282921c8b5effd4634935 # v1.2.6 (diff-budget triage for dense PRs)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -464,7 +465,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@2b724b2dac814bfc6695377af0c5fc1b95a1091e # v1.2.5 (cost line, readable findings)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@8dbd6733e84b31476ba282921c8b5effd4634935 # v1.2.6 (diff-budget triage for dense PRs)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
