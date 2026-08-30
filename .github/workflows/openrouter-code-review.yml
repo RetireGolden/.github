@@ -37,9 +37,9 @@
 # First-pass (opened / reopened / ready_for_review / workflow_dispatch):
 #   FlyOverCoderKY/openrouter-pr-review-action (live pin on the
 #   uses: lines below; do not restate the version here),
-#   models from the per-repo policy step (single grok lane for most
-#   repos, judge skipped; RetireGolden runs grok+glm two-lane with the
-#   recall-safe judge),
+#   models from the per-repo policy step (the product repos use the
+#   requested grok+glm two-lane roster with the recall-safe judge;
+#   RetireGolden-Docs uses a GLM-only lane),
 #   review_scope: full-pr, review_mode: auto, existing per-repo
 #   effort, max_tool_turns: "50". The action default is now 50
 #   (was 8). Omitting this input starved the live bake-off on
@@ -152,7 +152,6 @@ jobs:
       github.repository != 'RetireGolden/.github' &&
       github.repository != 'RetireGolden/cla-signatures' &&
       github.repository != 'RetireGolden/RetireBench-private' &&
-      github.repository != 'RetireGolden/RetireGolden-Docs' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'pull_request' &&
         !github.event.pull_request.draft &&
@@ -205,7 +204,7 @@ jobs:
           case "$GITHUB_REPOSITORY" in
             RetireGolden/RetireGolden)
               # Two-model roster (first repo flipped, 2026-08-28): grok +
-              # glm-5.3-flash lanes with the recall-safe v1.2.4 judge.
+              # glm-5.3-flash lanes with the recall-safe judge.
               # Bench-measured 95% recall / hardest-plant 4-in-5 vs 94% /
               # 2-in-5 single-lane at ~1.04x cost (action bench/RESULTS.md).
               echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
@@ -218,7 +217,7 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               ;;
             RetireGolden/RetireGolden-MCP)
-              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
+              echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
               echo "effort=high" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -227,12 +226,32 @@ jobs:
                 echo "EOF"
               } >> "$GITHUB_OUTPUT"
               ;;
-            RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro|RetireGolden/RetireBench)
-              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
+            RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro)
+              echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
+              echo "effort=high" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Run a full review, with particular attention to calculation correctness, public contracts, security, and release integrity. Obey AGENTS.md."
+                echo "Pin-bump PRs: when the change advances a SHA-pinned uses: reference (org reusable workflow or action) and the PR body links the upstream commit or release, do not flag the external SHA as unverifiable from this checkout. No checkout can verify a cross-repo pin, and a wrong or workflow-less ref fails at workflow startup rather than silently. Verify what is checkable locally instead: the ref is an exact 40-hex commit (never a branch or mutable tag), the pin comment names the upstream PR and pinned version per org convention, permissions and secrets wiring are unchanged, and any caller contract test that encodes the pin is updated."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/RetireBench)
+              echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
               echo "effort=medium" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
                 echo "Major issues and security only. This is not a full AGENTS.md audit."
+                echo "Pin-bump PRs: when the change advances a SHA-pinned uses: reference (org reusable workflow or action) and the PR body links the upstream commit or release, do not flag the external SHA as unverifiable from this checkout. No checkout can verify a cross-repo pin, and a wrong or workflow-less ref fails at workflow startup rather than silently. Verify what is checkable locally instead: the ref is an exact 40-hex commit (never a branch or mutable tag), the pin comment names the upstream PR and pinned version per org convention, permissions and secrets wiring are unchanged, and any caller contract test that encodes the pin is updated."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/RetireGolden-Docs)
+              echo "models=z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
+              echo "effort=medium" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Focus on documentation accuracy, unsafe or misleading retirement guidance, broken examples and links, and drift from public product contracts. Obey AGENTS.md."
                 echo "Pin-bump PRs: when the change advances a SHA-pinned uses: reference (org reusable workflow or action) and the PR body links the upstream commit or release, do not flag the external SHA as unverifiable from this checkout. No checkout can verify a cross-repo pin, and a wrong or workflow-less ref fails at workflow startup rather than silently. Verify what is checkable locally instead: the ref is an exact 40-hex commit (never a branch or mutable tag), the pin comment names the upstream PR and pinned version per org convention, permissions and secrets wiring are unchanged, and any caller contract test that encodes the pin is updated."
                 echo "EOF"
               } >> "$GITHUB_OUTPUT"
@@ -372,7 +391,7 @@ jobs:
           set -euo pipefail
 
           case "$GITHUB_REPOSITORY" in
-            RetireGolden/.github|RetireGolden/cla-signatures|RetireGolden/RetireBench-private|RetireGolden/RetireGolden-Docs)
+            RetireGolden/.github|RetireGolden/cla-signatures|RetireGolden/RetireBench-private)
               echo "NO SCAN repository; openrouter-first-pass-gate succeeds without a review."
               exit 0
               ;;
@@ -522,7 +541,6 @@ jobs:
       github.repository != 'RetireGolden/.github' &&
       github.repository != 'RetireGolden/cla-signatures' &&
       github.repository != 'RetireGolden/RetireBench-private' &&
-      github.repository != 'RetireGolden/RetireGolden-Docs' &&
       github.event_name == 'pull_request' &&
       !github.event.pull_request.draft &&
       github.event.action == 'synchronize'
@@ -608,7 +626,7 @@ jobs:
           case "$GITHUB_REPOSITORY" in
             RetireGolden/RetireGolden)
               # Two-model roster (first repo flipped, 2026-08-28): grok +
-              # glm-5.3-flash lanes with the recall-safe v1.2.4 judge.
+              # glm-5.3-flash lanes with the recall-safe judge.
               # Bench-measured 95% recall / hardest-plant 4-in-5 vs 94% /
               # 2-in-5 single-lane at ~1.04x cost (action bench/RESULTS.md).
               echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
@@ -621,7 +639,7 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               ;;
             RetireGolden/RetireGolden-MCP)
-              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
+              echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
               echo "effort=high" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
@@ -630,12 +648,32 @@ jobs:
                 echo "EOF"
               } >> "$GITHUB_OUTPUT"
               ;;
-            RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro|RetireGolden/RetireBench)
-              echo "models=x-ai/grok-4.6" >> "$GITHUB_OUTPUT"
+            RetireGolden/retiregolden.org|RetireGolden/RetireGolden-Pro)
+              echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
+              echo "effort=high" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Run a full review, with particular attention to calculation correctness, public contracts, security, and release integrity. Obey AGENTS.md."
+                echo "Pin-bump PRs: when the change advances a SHA-pinned uses: reference (org reusable workflow or action) and the PR body links the upstream commit or release, do not flag the external SHA as unverifiable from this checkout. No checkout can verify a cross-repo pin, and a wrong or workflow-less ref fails at workflow startup rather than silently. Verify what is checkable locally instead: the ref is an exact 40-hex commit (never a branch or mutable tag), the pin comment names the upstream PR and pinned version per org convention, permissions and secrets wiring are unchanged, and any caller contract test that encodes the pin is updated."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/RetireBench)
+              echo "models=x-ai/grok-4.6,z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
               echo "effort=medium" >> "$GITHUB_OUTPUT"
               {
                 echo "custom_instructions<<EOF"
                 echo "Major issues and security only. This is not a full AGENTS.md audit."
+                echo "Pin-bump PRs: when the change advances a SHA-pinned uses: reference (org reusable workflow or action) and the PR body links the upstream commit or release, do not flag the external SHA as unverifiable from this checkout. No checkout can verify a cross-repo pin, and a wrong or workflow-less ref fails at workflow startup rather than silently. Verify what is checkable locally instead: the ref is an exact 40-hex commit (never a branch or mutable tag), the pin comment names the upstream PR and pinned version per org convention, permissions and secrets wiring are unchanged, and any caller contract test that encodes the pin is updated."
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              ;;
+            RetireGolden/RetireGolden-Docs)
+              echo "models=z-ai/glm-5.3-flash" >> "$GITHUB_OUTPUT"
+              echo "effort=medium" >> "$GITHUB_OUTPUT"
+              {
+                echo "custom_instructions<<EOF"
+                echo "Focus on documentation accuracy, unsafe or misleading retirement guidance, broken examples and links, and drift from public product contracts. Obey AGENTS.md."
                 echo "Pin-bump PRs: when the change advances a SHA-pinned uses: reference (org reusable workflow or action) and the PR body links the upstream commit or release, do not flag the external SHA as unverifiable from this checkout. No checkout can verify a cross-repo pin, and a wrong or workflow-less ref fails at workflow startup rather than silently. Verify what is checkable locally instead: the ref is an exact 40-hex commit (never a branch or mutable tag), the pin comment names the upstream PR and pinned version per org convention, permissions and secrets wiring are unchanged, and any caller contract test that encodes the pin is updated."
                 echo "EOF"
               } >> "$GITHUB_OUTPUT"
