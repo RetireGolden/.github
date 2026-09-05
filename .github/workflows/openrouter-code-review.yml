@@ -275,7 +275,7 @@ jobs:
       - name: Run OpenRouter first-pass review
         id: openrouter_first
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@146a516683d3af34c1b9e403f02e6e02ccabc567 # action#20 (oversized diff fallback)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@388f464ca8030700213f48d373e1556a313d43be # action#29 (source-preserving review integrity)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -698,7 +698,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@146a516683d3af34c1b9e403f02e6e02ccabc567 # action#20 (oversized diff fallback)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@388f464ca8030700213f48d373e1556a313d43be # action#29 (source-preserving review integrity)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
