@@ -40,7 +40,7 @@
 #   models from the per-repo policy step (the product repos use the
 #   requested grok+glm two-lane roster with the recall-safe judge;
 #   RetireGolden-Docs uses a GLM-only lane),
-#   review_scope: full-pr, review_mode: auto, existing per-repo
+#   review_scope: full-pr, review_mode: auto (continues any existing ledger), existing per-repo
 #   effort, max_tool_turns: "50". The action default is now 50
 #   (was 8). Omitting this input starved the live bake-off on
 #   v1.0.0 (RetireGolden#304: 3.7s / 0 findings vs Grok
@@ -48,7 +48,7 @@
 #   passing 50. Job-level concurrency group is per-PR;
 #   cancel-in-progress is false so a later synchronize cannot
 #   cancel this review. As of v1.2.0 the first-pass seeds a review
-#   loop: a hidden ledger in the bot's review body plus inline
+#   loop if absent, or verifies the full PR while retaining it: a hidden ledger plus inline
 #   or-finding comments.
 #
 # Follow-up (synchronize): same action and single lane, review_scope:
@@ -101,8 +101,18 @@ on:
         description: PR number to review
         required: true
         type: string
+      reset_review:
+        description: Explicitly discard review history and start a new initial review
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
+      reset_review:
+        description: Reset history on a manual dispatch only; normally continue the ledger
+        required: false
+        type: boolean
+        default: false
       pr_number:
         description: PR number to review when the caller is not a pull_request event
         required: false
@@ -283,7 +293,7 @@ jobs:
       - name: Run OpenRouter first-pass review
         id: openrouter_first
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@956b494594d8c7969ec9b355fd11d8e39b3b6161 # action#31 (per-model Flex routing and review integrity)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@481069edae02298d4069f03b24ad1cdc67c5f348 # action#33 (review continuity and durable publication context)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -293,7 +303,7 @@ jobs:
           model_routes: ${{ steps.policy.outputs.model_routes }}
           effort: ${{ steps.policy.outputs.effort }}
           review_scope: full-pr
-          review_mode: auto
+          review_mode: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_review && 'initial' || 'auto' }}
           custom_instructions: ${{ steps.policy.outputs.custom_instructions }}
           roast_level: professional
           fail_on: never
@@ -427,8 +437,8 @@ jobs:
             exit 1
           fi
 
-          # A carry candidate must be a real bot-authored OpenRouter initial
-          # review. Complete reviews must have the OpenRouter ledger; partials
+          # A carry candidate must be a real bot-authored initial or full-PR verify
+          # review. Verification requires a ledger. Initial partials
           # are ledgerless by design. Both must expose the explicit Commit line,
           # and that SHA must be identical to or an ancestor of the current
           # head. The compare check rejects force-pushed/diverged histories.
@@ -469,7 +479,10 @@ jobs:
                   .user.login == "github-actions[bot]" and
                   .body != null and
                   (.body | contains("## OpenRouter pull-request review")) and
-                  (.body | contains("**Mode:** `initial`")) and
+                  ((.body | contains("**Mode:** `initial`")) or
+                   ((.body | contains("**Mode:** `verify`")) and
+                    (.body | contains("**Scope:** `full-pr`")) and
+                    (.body | contains("<!-- openrouter-review-ledger:v1:")))) and
                   ((.body | contains("<!-- openrouter-review-ledger:v1:")) or
                    (.body | contains("**Verdict:** `partial`"))) and
                   ((.body | contains("**Verdict:** `clean`")) or
@@ -714,7 +727,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@956b494594d8c7969ec9b355fd11d8e39b3b6161 # action#31 (per-model Flex routing and review integrity)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@481069edae02298d4069f03b24ad1cdc67c5f348 # action#33 (review continuity and durable publication context)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
