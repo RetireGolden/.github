@@ -270,18 +270,27 @@ jobs:
               ;;
           esac
 
+          # Same-PR comparison on the two active repos, ending at midnight Eastern.
+          # Existing pinned callers need this commit to opt in; all other repos stay unchanged.
+          if [[ "$GITHUB_REPOSITORY" == "RetireGolden/RetireGolden" || "$GITHUB_REPOSITORY" == "RetireGolden/RetireGolden-Pro" ]] &&
+             [[ "$(date -u +%Y-%m-%dT%H:%M:%SZ)" < "2026-09-06T04:00:00Z" ]]; then
+            echo 'models=x-ai/grok-4.6,z-ai/glm-5.3-flash,openai/gpt-6-astra' >> "$GITHUB_OUTPUT"
+            echo 'model_routes={"openai/gpt-6-astra":{"provider":"openai/flex","service_tier":"flex"}}' >> "$GITHUB_OUTPUT"
+          fi
+
       # First-pass must pass max_tool_turns. The action default is 50
       # as of v1.1.0; still pass 50 so a blank input cannot override.
       - name: Run OpenRouter first-pass review
         id: openrouter_first
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@146a516683d3af34c1b9e403f02e6e02ccabc567 # action#20 (oversized diff fallback)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@956b494594d8c7969ec9b355fd11d8e39b3b6161 # action#31 (per-model Flex routing and review integrity)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
           models: ${{ steps.policy.outputs.models }}
+          model_routes: ${{ steps.policy.outputs.model_routes }}
           effort: ${{ steps.policy.outputs.effort }}
           review_scope: full-pr
           review_mode: auto
@@ -692,19 +701,27 @@ jobs:
               ;;
           esac
 
+          # Same bounded trial as first-pass; expiry restores the original two lanes.
+          if [[ "$GITHUB_REPOSITORY" == "RetireGolden/RetireGolden" || "$GITHUB_REPOSITORY" == "RetireGolden/RetireGolden-Pro" ]] &&
+             [[ "$(date -u +%Y-%m-%dT%H:%M:%SZ)" < "2026-09-06T04:00:00Z" ]]; then
+            echo 'models=x-ai/grok-4.6,z-ai/glm-5.3-flash,openai/gpt-6-astra' >> "$GITHUB_OUTPUT"
+            echo 'model_routes={"openai/gpt-6-astra":{"provider":"openai/flex","service_tier":"flex"}}' >> "$GITHUB_OUTPUT"
+          fi
+
       # Follow-up: latest-commit, effort=low, max_tool_turns 30 to
       # match the Grok follow-up budget.
       - name: Run OpenRouter follow-up review
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@146a516683d3af34c1b9e403f02e6e02ccabc567 # action#20 (oversized diff fallback)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@956b494594d8c7969ec9b355fd11d8e39b3b6161 # action#31 (per-model Flex routing and review integrity)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
           models: ${{ steps.policy.outputs.models }}
+          model_routes: ${{ steps.policy.outputs.model_routes }}
           effort: low
           review_scope: latest-commit
           review_mode: auto
