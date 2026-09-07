@@ -293,7 +293,7 @@ jobs:
       - name: Run OpenRouter first-pass review
         id: openrouter_first
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@481069edae02298d4069f03b24ad1cdc67c5f348 # action#33 (review continuity and durable publication context)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@588955bd9e54909ac39a4729e9e3409b68ed400f # action#34 (bounded HTTP attempts and timeout diagnostics)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -317,6 +317,7 @@ jobs:
       - name: Repair the status comment on failure
         if: failure()
         env:
+          REVIEW_URL: ${{ steps.openrouter_first.outputs.review_url }}
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -325,8 +326,13 @@ jobs:
             exit 0
           fi
           MARKER='<!-- openrouter-pr-review-status -->'
-          BODY="$MARKER
-          OpenRouter review did not complete (step failure or timeout); no review was posted by this run. $RUN_URL"
+          if [ -n "${REVIEW_URL:-}" ]; then
+            BODY="$MARKER
+          OpenRouter workflow failed or timed out. A review was posted; see its verdict and diagnostics: $REVIEW_URL. Workflow: $RUN_URL"
+          else
+            BODY="$MARKER
+          OpenRouter workflow failed or timed out. Review publication could not be confirmed; inspect the PR reviews and workflow diagnostics: $RUN_URL"
+          fi
           existing="$(MARKER="$MARKER" gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
             --jq '.[] | select(.user.login == "github-actions[bot]" and .body != null and (.body | contains(env.MARKER))) | .id' \
@@ -727,7 +733,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@481069edae02298d4069f03b24ad1cdc67c5f348 # action#33 (review continuity and durable publication context)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@588955bd9e54909ac39a4729e9e3409b68ed400f # action#34 (bounded HTTP attempts and timeout diagnostics)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -749,6 +755,7 @@ jobs:
       - name: Repair the status comment on failure
         if: failure()
         env:
+          REVIEW_URL: ${{ steps.openrouter_followup.outputs.review_url }}
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -757,8 +764,13 @@ jobs:
             exit 0
           fi
           MARKER='<!-- openrouter-pr-review-status -->'
-          BODY="$MARKER
-          OpenRouter review did not complete (step failure or timeout); no review was posted by this run. $RUN_URL"
+          if [ -n "${REVIEW_URL:-}" ]; then
+            BODY="$MARKER
+          OpenRouter workflow failed or timed out. A review was posted; see its verdict and diagnostics: $REVIEW_URL. Workflow: $RUN_URL"
+          else
+            BODY="$MARKER
+          OpenRouter workflow failed or timed out. Review publication could not be confirmed; inspect the PR reviews and workflow diagnostics: $RUN_URL"
+          fi
           existing="$(MARKER="$MARKER" gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
             --jq '.[] | select(.user.login == "github-actions[bot]" and .body != null and (.body | contains(env.MARKER))) | .id' \
