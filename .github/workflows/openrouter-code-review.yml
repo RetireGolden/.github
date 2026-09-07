@@ -293,7 +293,7 @@ jobs:
       - name: Run OpenRouter first-pass review
         id: openrouter_first
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@97506cbdcdcf09979d55da099e28dfb2dbad2a28 # action#34 (bounded HTTP attempts and timeout diagnostics)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@588955bd9e54909ac39a4729e9e3409b68ed400f # action#34 (bounded HTTP attempts and timeout diagnostics)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -733,7 +733,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@97506cbdcdcf09979d55da099e28dfb2dbad2a28 # action#34 (bounded HTTP attempts and timeout diagnostics)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@588955bd9e54909ac39a4729e9e3409b68ed400f # action#34 (bounded HTTP attempts and timeout diagnostics)
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
