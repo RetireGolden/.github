@@ -971,3 +971,33 @@ jobs:
             echo "| Open bugs | \`$BUGS\` |"
             echo "| Review | $REVIEW"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  notify-profile-completion:
+    # A delivery failure must not invalidate a paid review or a valid proof.
+    # The destination gate stays closed; its manual dispatch can retry delivery.
+    continue-on-error: true
+    name: Notify profile completion after a bot dispatch
+    needs: [review-config, openrouter-first-pass, openrouter-follow-up, openrouter-first-pass-gate]
+    if: >-
+      always() && inputs.review_profiles_enabled &&
+      needs.review-config.result == 'success' &&
+      github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout the trusted notification helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: RetireGolden/.github
+          ref: ${{ needs.review-config.outputs.org_sha }}
+          path: .trusted-review-org
+          persist-credentials: false
+      - name: Wake the default-branch profile validator
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { dispatchWorkflowWake } = await import(`${process.env.GITHUB_WORKSPACE}/.trusted-review-org/scripts/workflow_wakeup.mjs`)
+            await dispatchWorkflowWake(github, core, context, 'openrouter-profile-completion.yml')
