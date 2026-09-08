@@ -118,6 +118,7 @@ on:
       review_level: { default: auto, type: choice, options: [auto, deep, cancel] }
 
 permissions:
+  actions: write
   contents: read
   pull-requests: write
   statuses: write
@@ -128,6 +129,7 @@ jobs:
     secrets:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     permissions:
+      actions: write
       contents: read
       pull-requests: write
       statuses: write
@@ -191,6 +193,12 @@ The receiver briefly waits for the source run to become terminal, then validates
 its provenance and checks current review receipts. After proof publication,
 a bot-dispatched completion similarly wakes `openrouter-ci-broker.yml` when
 installed. Human-triggered reviews retain their native completion events.
+
+The review caller must grant `actions: write` when adopting this revision,
+even if profiles are disabled: GitHub validates reusable-job permissions before
+its runtime conditions. Only the notification job requests Actions write access;
+model review jobs retain the reusable workflow's `actions: read` default.
+Completion callers already require Actions write access for policy refreshes.
 
 Consumers with a CI broker must accept a required string `source_run_id` on
 `workflow_dispatch`, run only on the default branch, wait for that profile run
