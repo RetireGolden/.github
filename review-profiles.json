@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "profiles": {
+    "code": {
+      "standard": {
+        "lanes": [
+          {
+            "required": true,
+            "model": "x-ai/grok-4.6"
+          },
+          {
+            "required": false,
+            "model": "z-ai/glm-5.3-flash"
+          }
+        ],
+        "judge_model": "openai/gpt-5.6-luna",
+        "effort": "high",
+        "verify_effort": "low",
+        "max_tool_turns": 50,
+        "verify_max_tool_turns": 30,
+        "lane_timeout_seconds": 600,
+        "job_budget_seconds": 1320
+      },
+      "deep": {
+        "lanes": [
+          {
+            "required": true,
+            "model": "x-ai/grok-4.6"
+          },
+          {
+            "required": false,
+            "model": "z-ai/glm-5.3-flash"
+          },
+          {
+            "required": true,
+            "model": "openai/gpt-6-astra"
+          }
+        ],
+        "judge_model": "openai/gpt-5.6-luna",
+        "effort": "high",
+        "verify_effort": "high",
+        "max_tool_turns": 50,
+        "verify_max_tool_turns": 50,
+        "lane_timeout_seconds": 900,
+        "job_budget_seconds": 1320
+      }
+    },
+    "docs": {
+      "standard": {
+        "lanes": [
+          {
+            "required": true,
+            "model": "z-ai/glm-5.3-flash"
+          }
+        ],
+        "judge_model": "openai/gpt-5.6-luna",
+        "effort": "medium",
+        "verify_effort": "low",
+        "max_tool_turns": 50,
+        "verify_max_tool_turns": 30,
+        "lane_timeout_seconds": 600,
+        "job_budget_seconds": 1320
+      },
+      "deep": {
+        "lanes": [
+          {
+            "required": true,
+            "model": "z-ai/glm-5.3-flash"
+          },
+          {
+            "required": true,
+            "model": "openai/gpt-6-astra"
+          }
+        ],
+        "judge_model": "openai/gpt-5.6-luna",
+        "effort": "high",
+        "verify_effort": "high",
+        "max_tool_turns": 50,
+        "verify_max_tool_turns": 50,
+        "lane_timeout_seconds": 900,
+        "job_budget_seconds": 1320
+      }
+    }
+  }
+}

@@ -97,6 +97,17 @@ on:
   # Optional manual re-run from the Actions tab on a PR's head repo
   workflow_dispatch:
     inputs:
+      review_profiles_enabled:
+        description: Enable trusted profiles after installing the profile completion gate
+        required: false
+        type: boolean
+        default: false
+      review_level:
+        description: Follow policy, request a deep review, or cancel a pending deep request
+        required: false
+        type: choice
+        options: ['auto', 'deep', 'cancel']
+        default: 'auto'
       pr_number:
         description: PR number to review
         required: true
@@ -114,6 +125,16 @@ on:
         default: 'off'
   workflow_call:
     inputs:
+      review_profiles_enabled:
+        description: Enable profiles only with the matching trusted completion workflow and CI helpers
+        required: false
+        type: boolean
+        default: false
+      review_level:
+        description: auto, deep, or cancel; explicit requests require a maintainer dispatch on the default branch
+        required: false
+        type: string
+        default: 'auto'
       review_policy:
         description: Optional target-branch guidance; off or base (all-role execution)
         required: false
@@ -145,6 +166,7 @@ on:
         required: true
 
 permissions:
+  actions: read
   contents: read
   pull-requests: write
   statuses: write
@@ -159,37 +181,76 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'pull_request' && !github.event.pull_request.draft))
     runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions: {}
+    timeout-minutes: 3
+    permissions:
+      actions: read
+      contents: read
     outputs:
+      org_sha: ${{ steps.source.outputs.sha }}
+      review_profiles: ${{ steps.config.outputs.review_profiles }}
       models: ${{ steps.config.outputs.models }}
       model_routes: ${{ steps.config.outputs.model_routes }}
       effort: ${{ steps.config.outputs.effort }}
       custom_instructions: ${{ steps.config.outputs.custom_instructions }}
     steps:
+      - name: Resolve this reusable workflow's immutable source
+        id: source
+        if: inputs.review_profiles_enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --jq '[.referenced_workflows[] | select(.path | startswith("RetireGolden/.github/.github/workflows/openrouter-code-review.yml@")) | .sha] | unique | if length == 1 then .[0] else error("ambiguous reusable workflow source") end')"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+      - name: Checkout trusted profile configuration
+        if: inputs.review_profiles_enabled
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: RetireGolden/.github
+          ref: ${{ steps.source.outputs.sha }}
+          path: .trusted-review-org
+          persist-credentials: false
       - name: Select standing roster and shared guidance
         id: config
         env:
+          FOLLOW_UP: ${{ github.event.action == 'synchronize' && 'true' || 'false' }}
+          RESET_REVIEW: ${{ inputs.reset_review && 'true' || 'false' }}
           REVIEW_POLICY: ${{ inputs.review_policy || 'off' }}
+          PROFILES_ENABLED: ${{ inputs.review_profiles_enabled && 'true' || 'false' }}
+          REVIEW_LEVEL: ${{ inputs.review_level || 'auto' }}
+          PROFILE_ROOT: ${{ github.workspace }}/.trusted-review-org
         shell: python
         run: |
+          import json
           import os
+          from pathlib import Path
 
           mode = os.environ.get("REVIEW_POLICY", "off")
           if mode not in {"off", "base"}:
               raise SystemExit("review_policy must be off or base")
-          # Transitional domain defaults remain until REVIEW.md is on each target branch.
+          enabled = os.environ.get("PROFILES_ENABLED", "false") == "true"
+          level = os.environ.get("REVIEW_LEVEL", "auto")
+          if level not in {"auto", "deep", "cancel"}:
+              raise SystemExit("review_level must be auto, deep, or cancel")
+          if (enabled and mode != "base") or (not enabled and level != "auto"):
+              raise SystemExit("profiles require review_policy=base; explicit requests require profiles")
+          if enabled and os.environ.get("RESET_REVIEW") == "true":
+              raise SystemExit("profile reviews must retain history; reset_review is unsupported")
+          # The four adopted repositories now keep domain guidance in REVIEW.md.
           # This configuration is part of the pinned reusable workflow, never PR code.
           policies = {
               "RetireGolden/RetireGolden": {
                   "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
                   "effort": "high",
-                  "guidance": "On a calculation/logic diff, flag it if there is no unit test, or if the test only mirrors the new code with no citable source (statute subparagraph + what it requires, IRS pub, or DOCS/domain). A green test that only mirrors the new code does not count. Fixtures must discriminate between plausible statutory readings. Keep engine vs UI money-math leaks, CLA/commit identity, and no private planning. Still obey AGENTS.md."
+                  "guidance": ""
               },
               "RetireGolden/RetireGolden-MCP": {
                   "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
                   "effort": "high",
-                  "guidance": "Focus on tool/schema contracts, no invented tax or statute behavior, auth/secrets handling, CLA/commit identity, and public-copy. Obey AGENTS.md."
+                  "guidance": ""
               },
               "RetireGolden/retiregolden.org": {
                   "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
@@ -199,7 +260,7 @@ jobs:
               "RetireGolden/RetireGolden-Pro": {
                   "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
                   "effort": "high",
-                  "guidance": "Run a full review, with particular attention to calculation correctness, public contracts, security, and release integrity. Obey AGENTS.md."
+                  "guidance": ""
               },
               "RetireGolden/RetireBench": {
                   "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
@@ -209,7 +270,7 @@ jobs:
               "RetireGolden/RetireGolden-Docs": {
                   "models": "z-ai/glm-5.3-flash",
                   "effort": "medium",
-                  "guidance": "Focus on documentation accuracy, unsafe or misleading retirement guidance, broken examples and links, and drift from public product contracts. Obey AGENTS.md."
+                  "guidance": ""
               },
               "*": {
                   "models": "x-ai/grok-4.6",
@@ -219,10 +280,16 @@ jobs:
           }
           common = 'Pin-bump PRs: when the change advances a SHA-pinned uses: reference (org reusable workflow or action) and the PR body links the upstream commit or release, do not flag the external SHA as unverifiable from this checkout. No checkout can verify a cross-repo pin, and a wrong or workflow-less ref fails at workflow startup rather than silently. Verify what is checkable locally instead: the ref is an exact 40-hex commit (never a branch or mutable tag), the pin comment names the upstream PR and pinned version per org convention, permissions and secrets wiring are unchanged, and any caller contract test that encodes the pin is updated.'
           policy = policies.get(os.environ["GITHUB_REPOSITORY"], policies["*"])
+          registry, routes = "", "{}"
+          if enabled:
+              root = Path(os.environ["PROFILE_ROOT"])
+              registry = json.dumps(json.loads((root / "review-profiles.json").read_text()), separators=(",", ":"))
+              routes = json.dumps(json.loads((root / "review-model-routes.json").read_text()), separators=(",", ":"))
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write("models=" + policy["models"] + "\n")
-              output.write("effort=" + policy["effort"] + "\n")
-              output.write("model_routes={}\n")
+              output.write("models=" + ("" if enabled else policy["models"]) + "\n")
+              output.write("effort=" + ("" if enabled else "low" if os.environ.get("FOLLOW_UP") == "true" else policy["effort"]) + "\n")
+              output.write("review_profiles=" + registry + "\n")
+              output.write("model_routes=" + routes + "\n")
               output.write("custom_instructions<<POLICY_EOF\n")
               output.write(policy["guidance"] + "\n" + common + "\nPOLICY_EOF\n")
 
@@ -296,12 +363,92 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.head.outputs.sha }}
 
+      # checkout's full-history refspec includes all refs/heads, so live main
+      # history is present even when it is not an ancestor of this PR head.
+
       # First-pass must pass max_tool_turns. The action default is 50
       # as of v1.1.0; still pass 50 so a blank input cannot override.
+      - name: Checkout trusted profile coordinator
+        if: inputs.review_profiles_enabled
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: RetireGolden/.github
+          ref: ${{ needs.review-config.outputs.org_sha }}
+          path: .trusted-review-org
+          persist-credentials: false
+      - name: Checkout trusted review contracts
+        if: inputs.review_profiles_enabled
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FlyOverCoderKY/openrouter-pr-review-action
+          ref: 6ef4bf920243c202c9a59276e4e4e5f016157a90
+          path: .trusted-review-action
+          persist-credentials: false
+      - name: Resolve pending review request
+        id: profile_request
+        if: inputs.review_profiles_enabled
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.trusted-review-org:${{ github.workspace }}/.trusted-review-action/src
+          PROFILE_ROOT: ${{ github.workspace }}/.trusted-review-org
+          SOURCE_WORKSPACE: ${{ github.workspace }}
+          ORG_WORKFLOW_SHA: ${{ needs.review-config.outputs.org_sha }}
+          HEAD_SHA: ${{ steps.head.outputs.sha }}
+          REVIEW_LEVEL: ${{ inputs.review_level || 'auto' }}
+          REQUEST_STATE_FILE: ${{ runner.temp }}/profile-request-state.json
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -P -m scripts.profile_gate begin
+      - name: Prepare shared review snapshot
+        id: profile_setup
+        if: inputs.review_profiles_enabled
+        uses: FlyOverCoderKY/openrouter-pr-review-action@6ef4bf920243c202c9a59276e4e4e5f016157a90 # action#36 profiles
+        with:
+          role: setup
+          github_token: ${{ github.token }}
+          pr_number: ${{ env.PR_NUMBER }}
+          review_policy: base
+          review_profiles: ${{ needs.review-config.outputs.review_profiles }}
+          model_routes: ${{ needs.review-config.outputs.model_routes }}
+          review_level: ${{ steps.profile_request.outputs.review_level }}
+          review_scope: full-pr
+          review_mode: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_review && 'initial' || 'auto' }}
+          custom_instructions: ${{ needs.review-config.outputs.custom_instructions }}
+          roast_level: professional
+          fail_on: never
+          status_comments: "true"
+          max_diff_kb: ${{ inputs.max_diff_kb || '600' }}
+          max_tool_turns: "50"
+          lane_timeout_seconds: "1080"
+          job_budget_seconds: "1320"
+          review_context_output_file: ${{ runner.temp }}/review-context.json
+      - name: Accept review request
+        id: profile_accept
+        if: inputs.review_profiles_enabled
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.trusted-review-org:${{ github.workspace }}/.trusted-review-action/src
+          PROFILE_ROOT: ${{ github.workspace }}/.trusted-review-org
+          SOURCE_WORKSPACE: ${{ github.workspace }}
+          ORG_WORKFLOW_SHA: ${{ needs.review-config.outputs.org_sha }}
+          HEAD_SHA: ${{ steps.head.outputs.sha }}
+          REVIEW_LEVEL: ${{ inputs.review_level || 'auto' }}
+          REQUEST_STATE_FILE: ${{ runner.temp }}/profile-request-state.json
+          GITHUB_TOKEN: ${{ github.token }}
+          REVIEW_CONTEXT_FILE: ${{ runner.temp }}/review-context.json
+          REVIEW_CONTEXT_SHA256: ${{ steps.profile_setup.outputs.review_context_sha256 }}
+        run: python3 -P -m scripts.profile_gate accept
+      - name: Preserve accepted review request
+        if: inputs.review_profiles_enabled && steps.profile_accept.outputs.request_file != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.profile_accept.outputs.request_artifact }}
+          path: ${{ steps.profile_accept.outputs.request_file }}
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Run OpenRouter first-pass review
         id: openrouter_first
+        if: steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@93cc91130605bc17cb583c5a5e899591773e048c # action#35 (hierarchical guidance; includes action#34 transport repair)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@6ef4bf920243c202c9a59276e4e4e5f016157a90 # action#36 profiles
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -310,6 +457,9 @@ jobs:
           models: ${{ needs.review-config.outputs.models }}
           model_routes: ${{ needs.review-config.outputs.model_routes }}
           effort: ${{ needs.review-config.outputs.effort }}
+          review_context_file: ${{ inputs.review_profiles_enabled && format('{0}/review-context.json', runner.temp) || '' }}
+          review_context_sha256: ${{ steps.profile_setup.outputs.review_context_sha256 }}
+          review_profiles: ${{ needs.review-config.outputs.review_profiles }}
           review_policy: ${{ inputs.review_policy || 'off' }}
           review_scope: full-pr
           review_mode: ${{ github.event_name == 'workflow_dispatch' && inputs.reset_review && 'initial' || 'auto' }}
@@ -401,6 +551,7 @@ jobs:
     if: >-
       always() &&
       !cancelled() &&
+      inputs.review_level != 'cancel' &&
       (github.event_name == 'pull_request' ||
        github.event_name == 'workflow_dispatch')
     # Deliberately no concurrency group. GitHub keeps only one pending run per
@@ -657,13 +808,91 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.head.outputs.sha }}
 
+      # Full history fetches all branch refs, including the trusted main tip.
+
       # Follow-up: latest-commit, effort=low, max_tool_turns 30 to
       # match the Grok follow-up budget.
+      - name: Checkout trusted profile coordinator
+        if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: RetireGolden/.github
+          ref: ${{ needs.review-config.outputs.org_sha }}
+          path: .trusted-review-org
+          persist-credentials: false
+      - name: Checkout trusted review contracts
+        if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FlyOverCoderKY/openrouter-pr-review-action
+          ref: 6ef4bf920243c202c9a59276e4e4e5f016157a90
+          path: .trusted-review-action
+          persist-credentials: false
+      - name: Resolve pending review request
+        id: profile_request
+        if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true'
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.trusted-review-org:${{ github.workspace }}/.trusted-review-action/src
+          PROFILE_ROOT: ${{ github.workspace }}/.trusted-review-org
+          SOURCE_WORKSPACE: ${{ github.workspace }}
+          ORG_WORKFLOW_SHA: ${{ needs.review-config.outputs.org_sha }}
+          HEAD_SHA: ${{ steps.head.outputs.sha }}
+          REVIEW_LEVEL: ${{ inputs.review_level || 'auto' }}
+          REQUEST_STATE_FILE: ${{ runner.temp }}/profile-request-state.json
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -P -m scripts.profile_gate begin
+      - name: Prepare shared review snapshot
+        id: profile_setup
+        if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true'
+        uses: FlyOverCoderKY/openrouter-pr-review-action@6ef4bf920243c202c9a59276e4e4e5f016157a90 # action#36 profiles
+        with:
+          role: setup
+          github_token: ${{ github.token }}
+          pr_number: ${{ env.PR_NUMBER }}
+          review_policy: base
+          review_profiles: ${{ needs.review-config.outputs.review_profiles }}
+          model_routes: ${{ needs.review-config.outputs.model_routes }}
+          review_level: ${{ steps.profile_request.outputs.review_level }}
+          review_scope: latest-commit
+          review_mode: auto
+          custom_instructions: ${{ needs.review-config.outputs.custom_instructions }}
+          roast_level: professional
+          fail_on: never
+          status_comments: "true"
+          max_diff_kb: ${{ inputs.max_diff_kb || '600' }}
+          max_tool_turns: "50"
+          lane_timeout_seconds: "1080"
+          job_budget_seconds: "1320"
+          review_context_output_file: ${{ runner.temp }}/review-context.json
+      - name: Accept review request
+        id: profile_accept
+        if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true'
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.trusted-review-org:${{ github.workspace }}/.trusted-review-action/src
+          PROFILE_ROOT: ${{ github.workspace }}/.trusted-review-org
+          SOURCE_WORKSPACE: ${{ github.workspace }}
+          ORG_WORKFLOW_SHA: ${{ needs.review-config.outputs.org_sha }}
+          HEAD_SHA: ${{ steps.head.outputs.sha }}
+          REVIEW_LEVEL: ${{ inputs.review_level || 'auto' }}
+          REQUEST_STATE_FILE: ${{ runner.temp }}/profile-request-state.json
+          GITHUB_TOKEN: ${{ github.token }}
+          REVIEW_CONTEXT_FILE: ${{ runner.temp }}/review-context.json
+          REVIEW_CONTEXT_SHA256: ${{ steps.profile_setup.outputs.review_context_sha256 }}
+        run: python3 -P -m scripts.profile_gate accept
+      - name: Preserve accepted review request
+        if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true' && steps.profile_accept.outputs.request_file != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.profile_accept.outputs.request_artifact }}
+          path: ${{ steps.profile_accept.outputs.request_file }}
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Run OpenRouter follow-up review
         id: openrouter_followup
-        if: steps.seeded.outputs.ready == 'true'
+        if: steps.seeded.outputs.ready == 'true' && steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@93cc91130605bc17cb583c5a5e899591773e048c # action#35 (hierarchical guidance; includes action#34 transport repair)
+        uses: FlyOverCoderKY/openrouter-pr-review-action@6ef4bf920243c202c9a59276e4e4e5f016157a90 # action#36 profiles
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -671,7 +900,10 @@ jobs:
           pr_number: ${{ github.event.pull_request.number || inputs.pr_number || github.event.inputs.pr_number }}
           models: ${{ needs.review-config.outputs.models }}
           model_routes: ${{ needs.review-config.outputs.model_routes }}
-          effort: low
+          effort: ${{ needs.review-config.outputs.effort }}
+          review_context_file: ${{ inputs.review_profiles_enabled && format('{0}/review-context.json', runner.temp) || '' }}
+          review_context_sha256: ${{ steps.profile_setup.outputs.review_context_sha256 }}
+          review_profiles: ${{ needs.review-config.outputs.review_profiles }}
           review_policy: ${{ inputs.review_policy || 'off' }}
           review_scope: latest-commit
           review_mode: auto
@@ -680,7 +912,7 @@ jobs:
           fail_on: never
           status_comments: "true"
           max_diff_kb: ${{ inputs.max_diff_kb || '600' }}
-          max_tool_turns: "30"
+          max_tool_turns: ${{ inputs.review_profiles_enabled && '50' || '30' }}
 
       # Same step-timeout + finalizer rationale as the first-pass job.
       - name: Repair the status comment on failure
