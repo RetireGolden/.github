@@ -569,7 +569,7 @@ async function reviewRaceBlocksAuthorization(
   context,
   { pullNumber, headSha, createdAt, proofStartedAt, currentReviewRun },
 ) {
-  const { owner, repo, repository, defaultBranch, reviewPin, trustedCallerSha } = context;
+  const { owner, repo } = context;
   if (currentReviewRun.status !== 'completed') {
     throw new Error('current review run is not completed');
   }
@@ -594,11 +594,12 @@ async function reviewRaceBlocksAuthorization(
     if (!runMatchesPull(run, pullNumber, headSha)) {
       continue;
     }
-    try {
-      await verifyReviewRunProvenance(github, context, run);
-    } catch {
-      throw new Error('matching review run has untrusted provenance');
-    }
+    // This scan only invalidates proof; it never authorizes a review. The
+    // authoritative review and completed proof have already passed provenance.
+    // Older branch-caller audits are expected during a workflow-pin migration;
+    // they are not races once they finish before that trusted proof starts.
+    // Any matching active or later-completing run still blocks authorization,
+    // including runs that would fail provenance themselves.
     if (run.status !== 'completed') {
       throw new Error('a newer matching review run is still active');
     }

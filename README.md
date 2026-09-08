@@ -49,6 +49,11 @@ A clean review can retain settled `disputed` findings in its ledger so later
 rounds remember the rebuttals. Profile receipt validation rejects open findings;
 retained settled findings do not block proof or authorize unresolved GitHub threads.
 
+The final CI race check blocks matching active reviews and reviews completing at
+or after proof starts. Older completed branch-workflow audits do not invalidate
+a newer trusted-main proof; the review used for authorization must still pass
+all current caller, pin, receipt, and proof checks.
+
 ### Baseline panels
 
 | Profile | Standard (auto) | Deep (maintainer dispatch) |
