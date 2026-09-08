@@ -26,7 +26,7 @@ added in a PR becomes authoritative only after it merges.
 
 Use concise prose to describe repository contracts, with nested files for
 component-specific invariants. See the action's
-[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/2eb560ca23346c4387828b4b9763698702094210/docs/review-policy.md).
+[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/188cd5557765c858a37c1da78960cd353bcbcd60/docs/review-policy.md).
 In this guidance rollout, `profile: code` and `profile: docs` are descriptive;
 they do not select models by themselves.
 
@@ -59,6 +59,13 @@ reserves one minute total for the tool-free judge (retries included), plus three
 minutes for publication and a five-second margin. Review lanes receive the
 remaining time up to their configured ceiling. Judge failure preserves validated
 lane findings through a visible deterministic union fallback.
+
+OpenRouter's 180-second timeout bounds connection/header setup and socket
+inactivity. Active response bodies may continue until the absolute lane-stage
+deadline; a structured finish uses its whole remaining window, and retries use
+only time actually left. Separate connection watchdogs and stage deadlines keep
+DNS stalls and endless responses bounded. Failed-lane/checkpoint diagnostics
+distinguish connection setup, socket inactivity, and elapsed deadline expiry.
 
 `review-model-routes.json` supplies provider routing for exact lane slugs (for
 example Astra via `openai/flex`). Deep raises the minimum panel; it retains
@@ -181,7 +188,7 @@ Local workflow contract checks:
 ```sh
 # Obtain the pinned public action contracts outside product source.
 git clone --no-checkout https://github.com/FlyOverCoderKY/openrouter-pr-review-action .trusted-review-action
-git -C .trusted-review-action checkout 2eb560ca23346c4387828b4b9763698702094210
+git -C .trusted-review-action checkout 188cd5557765c858a37c1da78960cd353bcbcd60
 export PYTHONPATH="$PWD/.trusted-review-action/src"
 uv run --with jq --with pyyaml python -m unittest discover -s tests
 node --test tests/profile-consumer.test.mjs
