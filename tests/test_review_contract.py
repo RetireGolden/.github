@@ -28,10 +28,11 @@ class ReviewSelectorTests(unittest.TestCase):
         ledger=True,
         author="github-actions[bot]",
         verdict="clean",
+        kind="full-pr",
     ):
         body = (
             "## OpenRouter pull-request review\n"
-            f"**Mode:** `{mode}`\n**Scope:** `{scope}` (full-pr)\n"
+            f"**Mode:** `{mode}`\n**Scope:** `{scope}` ({kind})\n"
             f"**Verdict:** `{verdict}`\n**Commit:** `{'a' * 40}`\n"
         )
         if ledger:
@@ -52,6 +53,11 @@ class ReviewSelectorTests(unittest.TestCase):
 
     def test_full_pr_verify_is_completion_evidence(self):
         self.assertTrue(self.selected())
+
+    def test_rebase_verify_requires_full_diff_and_ledger(self):
+        self.assertTrue(self.selected(scope="rebase"))
+        self.assertFalse(self.selected(scope="rebase", ledger=False))
+        self.assertFalse(self.selected(scope="rebase", kind="single-commit"))
 
     def test_initial_completion_still_works(self):
         for verdict in ("clean", "issues", "partial"):

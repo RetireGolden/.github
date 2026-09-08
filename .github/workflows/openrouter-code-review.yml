@@ -382,7 +382,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 5bb16c7a5ba87a802d7884ccbfa5e99d10978a49
+          ref: 212775ffea22e806cddcb706c73a3df26fbcb6d0
           path: .trusted-review-action
           persist-credentials: false
       - name: Resolve pending review request
@@ -401,7 +401,7 @@ jobs:
       - name: Prepare shared review snapshot
         id: profile_setup
         if: inputs.review_profiles_enabled
-        uses: FlyOverCoderKY/openrouter-pr-review-action@5bb16c7a5ba87a802d7884ccbfa5e99d10978a49 # action#40 settled-dispute receipt validation
+        uses: FlyOverCoderKY/openrouter-pr-review-action@212775ffea22e806cddcb706c73a3df26fbcb6d0 # action#41 rebase scope and review history
         with:
           role: setup
           github_token: ${{ github.token }}
@@ -449,7 +449,7 @@ jobs:
         id: openrouter_first
         if: steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@5bb16c7a5ba87a802d7884ccbfa5e99d10978a49 # action#40 settled-dispute receipt validation
+        uses: FlyOverCoderKY/openrouter-pr-review-action@212775ffea22e806cddcb706c73a3df26fbcb6d0 # action#41 rebase scope and review history
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -544,8 +544,8 @@ jobs:
   #   never masks a failed or stale fresh first pass.
   # - synchronize: a prior bot-authored initial review may carry only when its
   #   explicit reviewed commit is the current head or an ancestor of it.
-  # - force-push/divergence: historical carry is rejected; a fresh initial
-  #   OpenRouter review on the new lineage is required.
+  # - force-push/divergence: historical carry is rejected; a fresh full-PR
+  #   initial, full-PR verification, or rebase review on the new lineage is required.
   openrouter-first-pass-gate:
     name: openrouter-first-pass-gate
     needs: [openrouter-first-pass]
@@ -604,7 +604,7 @@ jobs:
             exit 1
           fi
 
-          # A carry candidate must be a real bot-authored initial or full-PR verify
+          # A carry candidate must be a real bot-authored initial, full-PR verify, or rebase
           # review. Verification requires a ledger. Initial partials
           # are ledgerless by design. Both must expose the explicit Commit line,
           # and that SHA must be identical to or an ancestor of the current
@@ -648,7 +648,8 @@ jobs:
                   (.body | contains("## OpenRouter pull-request review")) and
                   ((.body | contains("**Mode:** `initial`")) or
                    ((.body | contains("**Mode:** `verify`")) and
-                    (.body | contains("**Scope:** `full-pr`")) and
+                    ((.body | contains("**Scope:** `full-pr` (full-pr)")) or
+                     (.body | contains("**Scope:** `rebase` (full-pr)"))) and
                     (.body | contains("<!-- openrouter-review-ledger:v1:")))) and
                   ((.body | contains("<!-- openrouter-review-ledger:v1:")) or
                    (.body | contains("**Verdict:** `partial`"))) and
@@ -714,7 +715,7 @@ jobs:
               succeed "$existing_url" "OpenRouter first-pass at ${existing_sha} appeared in the current lineage; carried onto ${HEAD_SHA}."
             fi
           done
-          echo "::error::Timed out waiting for a lineage-valid OpenRouter first-pass review. A force-pushed/diverged head requires a fresh full initial review."
+          echo "::error::Timed out waiting for a lineage-valid OpenRouter first-pass review. A force-pushed/diverged head requires a completed full-PR or rebase review on the new lineage."
           exit 1
 
   openrouter-follow-up:
@@ -826,7 +827,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 5bb16c7a5ba87a802d7884ccbfa5e99d10978a49
+          ref: 212775ffea22e806cddcb706c73a3df26fbcb6d0
           path: .trusted-review-action
           persist-credentials: false
       - name: Resolve pending review request
@@ -845,7 +846,7 @@ jobs:
       - name: Prepare shared review snapshot
         id: profile_setup
         if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true'
-        uses: FlyOverCoderKY/openrouter-pr-review-action@5bb16c7a5ba87a802d7884ccbfa5e99d10978a49 # action#40 settled-dispute receipt validation
+        uses: FlyOverCoderKY/openrouter-pr-review-action@212775ffea22e806cddcb706c73a3df26fbcb6d0 # action#41 rebase scope and review history
         with:
           role: setup
           github_token: ${{ github.token }}
@@ -893,7 +894,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true' && steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@5bb16c7a5ba87a802d7884ccbfa5e99d10978a49 # action#40 settled-dispute receipt validation
+        uses: FlyOverCoderKY/openrouter-pr-review-action@212775ffea22e806cddcb706c73a3df26fbcb6d0 # action#41 rebase scope and review history
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:

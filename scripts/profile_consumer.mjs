@@ -359,11 +359,14 @@ function validateReceipt(value, bindings, raw) {
   if (!['clean', 'issues', 'partial', 'error'].includes(value.verdict)) {
     throw new Error('verdict is invalid');
   }
-  if (!['full-pr', 'latest-commit'].includes(value.scope)) {
+  if (!['full-pr', 'latest-commit', 'rebase'].includes(value.scope)) {
     throw new Error('scope is invalid');
   }
   if (!['initial', 'verify'].includes(value.mode)) {
     throw new Error('mode is invalid');
+  }
+  if (value.scope === 'rebase' && value.mode !== 'verify') {
+    throw new Error('rebase requires verify mode');
   }
   const runUrl = value.run_url;
   const runUrlRe = new RegExp(
