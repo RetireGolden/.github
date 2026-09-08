@@ -26,7 +26,7 @@ added in a PR becomes authoritative only after it merges.
 
 Use concise prose to describe repository contracts, with nested files for
 component-specific invariants. See the action's
-[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/4fe6e668c9352b3f2a65254c4900d6443b5279e2/docs/review-policy.md).
+[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/2eb560ca23346c4387828b4b9763698702094210/docs/review-policy.md).
 In this guidance rollout, `profile: code` and `profile: docs` are descriptive;
 they do not select models by themselves.
 
@@ -54,7 +54,11 @@ branch protection.
 
 Both levels retain the existing 1,080-second lane ceiling and 1,320-second job
 budget. Deep adds required coverage and raises verification effort within those
-bounds; adopting profiles does not shorten the normal review budget.
+bounds; adopting profiles does not shorten the normal review budget. The shared action
+reserves one minute total for the tool-free judge (retries included), plus three
+minutes for publication and a five-second margin. Review lanes receive the
+remaining time up to their configured ceiling. Judge failure preserves validated
+lane findings through a visible deterministic union fallback.
 
 `review-model-routes.json` supplies provider routing for exact lane slugs (for
 example Astra via `openai/flex`). Deep raises the minimum panel; it retains
@@ -177,7 +181,7 @@ Local workflow contract checks:
 ```sh
 # Obtain the pinned public action contracts outside product source.
 git clone --no-checkout https://github.com/FlyOverCoderKY/openrouter-pr-review-action .trusted-review-action
-git -C .trusted-review-action checkout 4fe6e668c9352b3f2a65254c4900d6443b5279e2
+git -C .trusted-review-action checkout 2eb560ca23346c4387828b4b9763698702094210
 export PYTHONPATH="$PWD/.trusted-review-action/src"
 uv run --with jq --with pyyaml python -m unittest discover -s tests
 node --test tests/profile-consumer.test.mjs
