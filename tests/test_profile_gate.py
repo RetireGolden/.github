@@ -696,14 +696,44 @@ class GateCommandTests(unittest.TestCase):
             gate._plan_one(client, SHA_B, SHA_A, 7, auto_dispatch=True, mutate=False)
         refresh.assert_not_called()
 
+    def test_registry_preserves_legacy_lane_and_job_budgets(self) -> None:
+        from or_pr_review.harness import DEFAULT_LANE_TIMEOUT_SECONDS
+        from or_pr_review.review_plan import parse_review_profiles
+
+        raw = (Path(__file__).parents[1] / "review-profiles.json").read_text(
+            encoding="utf-8"
+        )
+        parse_review_profiles(raw)
+        for profile in json.loads(raw)["profiles"].values():
+            for panel in profile.values():
+                self.assertEqual(
+                    panel["lane_timeout_seconds"], DEFAULT_LANE_TIMEOUT_SECONDS
+                )
+                self.assertEqual(panel["job_budget_seconds"], 1320)
+
+    def test_active_search_cap_counts_completed_race_snapshots(self) -> None:
+        completed = {"id": 7, "run_attempt": 1, "status": "completed"}
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=Mock(
+                side_effect=_active_run_pages({"queued": [completed] * 1000})
+            ),
+        )
+        with self.assertRaisesRegex(
+            ProfileGitHubError, "search reached its result bound"
+        ):
+            gate._active_workflow_runs(client)
+
     def test_active_matching_run_skips_unrelated_untrusted_runs(self) -> None:
         unrelated = {
+            "id": 99,
+            "run_attempt": 1,
             "status": "in_progress",
             "display_title": "OpenRouter PR #99: auto",
         }
         client = SimpleNamespace(
             config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
-            paginated=Mock(return_value=[unrelated]),
+            paginated=Mock(side_effect=_active_run_pages({"in_progress": [unrelated]})),
         )
 
         def verifier(_run):
@@ -712,16 +742,255 @@ class GateCommandTests(unittest.TestCase):
         self.assertFalse(gate._active_matching_run(client, verifier, 7, SHA_A))
 
     def test_active_matching_untrusted_run_defers_additional_spend(self) -> None:
-        matching = {"status": "queued", "display_title": "OpenRouter PR #7: auto"}
+        matching = {
+            "id": 7,
+            "run_attempt": 1,
+            "status": "queued",
+            "display_title": "OpenRouter PR #7: auto",
+        }
         client = SimpleNamespace(
             config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
-            paginated=Mock(return_value=[matching]),
+            paginated=Mock(side_effect=_active_run_pages({"queued": [matching]})),
         )
 
         def verifier(_run):
             raise ProfileGitHubError("untrusted")
 
         self.assertTrue(gate._active_matching_run(client, verifier, 7, SHA_A))
+
+    def test_active_matching_run_queries_only_active_statuses(self) -> None:
+        calls: list[str] = []
+
+        def paginated(endpoint: str, list_key: str, max_items: int):
+            calls.append(endpoint)
+            return []
+
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=paginated,
+        )
+        gate._active_matching_run(client, lambda _run: verified_run(), 7, SHA_A)
+        self.assertEqual(len(calls), len(gate.ACTIVE_WORKFLOW_RUN_STATUSES))
+        for index, status in enumerate(gate.ACTIVE_WORKFLOW_RUN_STATUSES):
+            self.assertIn(f"status={status}", calls[index])
+        self.assertTrue(all("status=" in call for call in calls))
+
+    def test_active_matching_run_blocks_each_active_status_despite_completed_history(
+        self,
+    ) -> None:
+        for status in gate.ACTIVE_WORKFLOW_RUN_STATUSES:
+            matching = {
+                "id": 42,
+                "run_attempt": 1,
+                "status": status,
+                "display_title": "OpenRouter PR #7: auto",
+            }
+            client = SimpleNamespace(
+                config=TrustedWorkflow(
+                    "RetireGolden", "example", "main", reusable_sha=PIN
+                ),
+                paginated=Mock(side_effect=_active_run_pages({status: [matching]})),
+            )
+
+            def verifier(_run):
+                raise ProfileGitHubError("untrusted")
+
+            self.assertTrue(
+                gate._active_matching_run(client, verifier, 7, SHA_A),
+                status,
+            )
+
+    def test_active_matching_run_ignores_completed_snapshot_race(self) -> None:
+        completed = {
+            "id": 7,
+            "run_attempt": 1,
+            "status": "completed",
+            "display_title": "OpenRouter PR #7: auto",
+        }
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=Mock(side_effect=_active_run_pages({"in_progress": [completed]})),
+        )
+
+        def verifier(_run):
+            raise ProfileGitHubError("untrusted")
+
+        self.assertFalse(gate._active_matching_run(client, verifier, 7, SHA_A))
+
+    def test_active_workflow_runs_queries_each_status_with_full_per_query_cap(
+        self,
+    ) -> None:
+        caps: list[int] = []
+
+        def paginated(endpoint: str, list_key: str, max_items: int):
+            caps.append(max_items)
+            return []
+
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=paginated,
+        )
+        gate._active_workflow_runs(client)
+        self.assertEqual(len(caps), len(gate.ACTIVE_WORKFLOW_RUN_STATUSES))
+        self.assertTrue(all(cap == gate.MAX_ACTIVE_WORKFLOW_RUNS for cap in caps))
+
+    def test_active_workflow_runs_fails_closed_when_cap_reached_before_later_status(
+        self,
+    ) -> None:
+        unrelated = [
+            {
+                "id": index,
+                "run_attempt": 1,
+                "status": "requested",
+                "display_title": f"OpenRouter PR #{index}: auto",
+            }
+            for index in range(1, gate.MAX_ACTIVE_WORKFLOW_RUNS + 1)
+        ]
+        target = {
+            "id": 9999,
+            "run_attempt": 1,
+            "status": "in_progress",
+            "display_title": "OpenRouter PR #7: auto",
+        }
+
+        def paginated(endpoint: str, list_key: str, max_items: int):
+            if "status=requested" in endpoint:
+                return unrelated
+            if "status=in_progress" in endpoint:
+                return [target]
+            return []
+
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=paginated,
+        )
+        with self.assertRaisesRegex(
+            ProfileGitHubError, "active workflow search reached its result bound"
+        ):
+            gate._active_workflow_runs(client)
+
+    def test_active_workflow_runs_dedupes_same_run_across_statuses(self) -> None:
+        matching = {
+            "id": 7,
+            "run_attempt": 2,
+            "status": "queued",
+            "display_title": "OpenRouter PR #7: auto",
+        }
+
+        def paginated(endpoint: str, list_key: str, max_items: int):
+            if "status=queued" in endpoint:
+                return [matching]
+            if "status=in_progress" in endpoint:
+                return [{**matching, "status": "in_progress"}]
+            return []
+
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=paginated,
+        )
+        collected = gate._active_workflow_runs(client)
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0]["id"], 7)
+        self.assertEqual(collected[0]["run_attempt"], 2)
+
+    def test_active_workflow_runs_fails_closed_on_malformed_matching_record(
+        self,
+    ) -> None:
+        malformed = {
+            "id": "not-an-int",
+            "run_attempt": 1,
+            "status": "queued",
+            "display_title": "OpenRouter PR #7: auto",
+        }
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=Mock(side_effect=_active_run_pages({"queued": [malformed]})),
+        )
+        with self.assertRaisesRegex(
+            ProfileGitHubError, "workflow run identity is invalid"
+        ):
+            gate._active_workflow_runs(client)
+
+    def test_active_matching_run_dedupes_same_run_across_statuses(self) -> None:
+        matching = {
+            "id": 7,
+            "run_attempt": 2,
+            "status": "queued",
+            "display_title": "OpenRouter PR #7: auto",
+        }
+        calls: list[str] = []
+
+        def paginated(endpoint: str, list_key: str, max_items: int):
+            calls.append(endpoint)
+            if "status=queued" in endpoint:
+                return [matching]
+            if "status=in_progress" in endpoint:
+                return [{**matching, "status": "in_progress"}]
+            return []
+
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=paginated,
+        )
+
+        def verifier(_run):
+            raise ProfileGitHubError("untrusted")
+
+        self.assertTrue(gate._active_matching_run(client, verifier, 7, SHA_A))
+        self.assertEqual(len(calls), len(gate.ACTIVE_WORKFLOW_RUN_STATUSES))
+
+    def test_active_matching_run_old_active_rerun_still_blocks(self) -> None:
+        old = {
+            "id": 3,
+            "run_attempt": 1,
+            "status": "in_progress",
+            "display_title": "OpenRouter PR #7: auto",
+            "created_at": "2020-01-01T00:00:00Z",
+        }
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=Mock(side_effect=_active_run_pages({"in_progress": [old]})),
+        )
+
+        def verifier(_run):
+            raise ProfileGitHubError("untrusted")
+
+        self.assertTrue(gate._active_matching_run(client, verifier, 7, SHA_A))
+
+    def test_active_matching_run_ignores_unbounded_completed_history(self) -> None:
+        completed_history = [
+            {
+                "id": index,
+                "run_attempt": 1,
+                "status": "completed",
+                "display_title": "OpenRouter PR #7: auto",
+            }
+            for index in range(5000)
+        ]
+
+        def paginated(endpoint: str, list_key: str, max_items: int):
+            if "status=" not in endpoint:
+                return completed_history
+            return []
+
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=paginated,
+        )
+
+        def verifier(_run):
+            raise ProfileGitHubError("untrusted")
+
+        self.assertFalse(gate._active_matching_run(client, verifier, 7, SHA_A))
+
+        client = SimpleNamespace(
+            config=TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN),
+            paginated=Mock(
+                side_effect=ProfileGitHubError("pagination exceeds its item cap")
+            ),
+        )
+        with self.assertRaises(ProfileGitHubError):
+            gate._active_matching_run(client, lambda _run: verified_run(), 7, SHA_A)
 
     def test_refresh_dispatch_is_once_per_identity(self) -> None:
         review = SimpleNamespace(context=SimpleNamespace())
@@ -1004,6 +1273,20 @@ def verified_run():
     return VerifiedRun(
         "RetireGolden", "example", 1, 1, SHA_A, "workflow_dispatch", "main", 9, {}, ()
     )
+
+
+def _active_run_pages(by_status: dict[str, list[dict]]):
+    """Return only status-filtered workflow-run pages for active-run tests."""
+
+    def paginated(endpoint: str, list_key: str, max_items: int):
+        if "status=" not in endpoint:
+            raise AssertionError(f"unfiltered workflow run request: {endpoint}")
+        status = endpoint.rsplit("status=", 1)[-1]
+        if status not in gate.ACTIVE_WORKFLOW_RUN_STATUSES:
+            raise AssertionError(f"unexpected workflow run status filter: {status}")
+        return list(by_status.get(status, ()))
+
+    return paginated
 
 
 if __name__ == "__main__":  # pragma: no cover

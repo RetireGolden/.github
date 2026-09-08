@@ -52,6 +52,10 @@ branch protection.
 | `code` | Grok required, GLM optional | Grok required, GLM optional, Astra/Flex required |
 | `docs` | GLM required | GLM required, Astra/Flex required |
 
+Both levels retain the existing 1,080-second lane ceiling and 1,320-second job
+budget. Deep adds required coverage and raises verification effort within those
+bounds; adopting profiles does not shorten the normal review budget.
+
 `review-model-routes.json` supplies provider routing for exact lane slugs (for
 example Astra via `openai/flex`). Deep raises the minimum panel; it retains
 the finding ledger and continues a full-PR review. There is no automatic risk

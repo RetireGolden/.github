@@ -66,6 +66,14 @@ REFRESH_MARKER_PREFIX = "Refresh requested "
 # Context artifacts are retained for 30 days. Bound the whole PR lifecycle
 # below that horizon so automatic expiry cannot erase accepted requests.
 MAX_PR_AGE_SECONDS = 25 * 24 * 60 * 60
+ACTIVE_WORKFLOW_RUN_STATUSES = (
+    "requested",
+    "pending",
+    "waiting",
+    "queued",
+    "in_progress",
+)
+MAX_ACTIVE_WORKFLOW_RUNS = 1000
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 TITLE = re.compile(r"\AOpenRouter PR #([1-9][0-9]*): (auto|deep|cancel)\Z")
@@ -888,18 +896,69 @@ def _receipt_digest(item: VerifiedReview) -> str:
     return hashlib.sha256(canonical_receipt(item.receipt)).hexdigest()
 
 
+def _active_workflow_runs(client: ProfileGitHub) -> list[Mapping[str, Any]]:
+    """Return bounded, deduplicated active workflow runs for the caller workflow.
+
+    GitHub's workflow-run listing is paginated without a date cutoff.  Query each
+    documented active ``status`` separately so completed history cannot crowd out
+    in-flight runs as repositories age.  GitHub's filtered search itself silently
+    caps at 1000 items, so reaching ``MAX_ACTIVE_WORKFLOW_RUNS`` unique active
+    runs cannot prove the listing is complete and must fail closed.
+    """
+    base = (
+        f"/repos/{client.config.owner}/{client.config.name}"
+        "/actions/workflows/openrouter-code-review.yml/runs"
+    )
+    seen: set[tuple[int, int]] = set()
+    collected: list[Mapping[str, Any]] = []
+    for status in ACTIVE_WORKFLOW_RUN_STATUSES:
+        snapshots = client.paginated(
+            f"{base}?status={status}",
+            "workflow_runs",
+            MAX_ACTIVE_WORKFLOW_RUNS,
+        )
+        # Filtered GitHub searches silently stop at 1,000. Even completed or
+        # duplicate snapshots at that boundary cannot prove the list complete.
+        if len(snapshots) >= MAX_ACTIVE_WORKFLOW_RUNS:
+            raise ProfileGitHubError("active workflow search reached its result bound")
+        for run in snapshots:
+            if not isinstance(run, Mapping):
+                raise ProfileGitHubError("workflow run snapshot is invalid")
+            run_status = run.get("status")
+            if run_status == "completed":
+                continue
+            if run_status not in ACTIVE_WORKFLOW_RUN_STATUSES:
+                raise ProfileGitHubError("workflow run has an unexpected active status")
+            run_id = run.get("id")
+            attempt = run.get("run_attempt")
+            if (
+                not isinstance(run_id, int)
+                or isinstance(run_id, bool)
+                or run_id <= 0
+                or not isinstance(attempt, int)
+                or isinstance(attempt, bool)
+                or not 1 <= attempt <= 1000
+            ):
+                raise ProfileGitHubError("workflow run identity is invalid")
+            key = (run_id, attempt)
+            if key in seen:
+                continue
+            seen.add(key)
+            collected.append(run)
+            if len(seen) >= MAX_ACTIVE_WORKFLOW_RUNS:
+                raise ProfileGitHubError(
+                    "active workflow run count exceeds its retention bound"
+                )
+    return collected
+
+
 def _active_matching_run(
     client: ProfileGitHub,
     verifier: Callable[[Mapping[str, Any]], VerifiedRun],
     number: int,
     head: str,
 ) -> bool:
-    runs = client.paginated(
-        f"/repos/{client.config.owner}/{client.config.name}/actions/workflows/openrouter-code-review.yml/runs",
-        "workflow_runs",
-        1000,
-    )
-    for run in runs:
+    for run in _active_workflow_runs(client):
         if not isinstance(run, Mapping) or run.get("status") == "completed":
             continue
         if not _run_plausible_pr(run, number) and not (
