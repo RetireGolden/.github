@@ -14,7 +14,7 @@ COMPLETION = yaml.load(
     (ROOT / '.github/workflows/openrouter-profile-completion.yml').read_text(encoding='utf-8'),
     Loader=yaml.BaseLoader,
 )
-ACTION_PIN = '4fe6e668c9352b3f2a65254c4900d6443b5279e2'
+ACTION_PIN = '2eb560ca23346c4387828b4b9763698702094210'
 
 
 def job_steps(workflow, job_id):

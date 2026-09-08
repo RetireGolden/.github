@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 4fe6e668c9352b3f2a65254c4900d6443b5279e2
+          ref: 2eb560ca23346c4387828b4b9763698702094210
           path: .trusted-review-action
           persist-credentials: false
       - name: Resolve current profile evidence
@@ -106,7 +106,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 4fe6e668c9352b3f2a65254c4900d6443b5279e2
+          ref: 2eb560ca23346c4387828b4b9763698702094210
           path: .trusted-review-action
           persist-credentials: false
       - name: Confirm current profile evidence
@@ -148,7 +148,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 4fe6e668c9352b3f2a65254c4900d6443b5279e2
+          ref: 2eb560ca23346c4387828b4b9763698702094210
           path: .trusted-review-action
           persist-credentials: false
       - name: Publish only completed current proofs
