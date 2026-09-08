@@ -158,6 +158,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number: { required: false, type: string }
+      source_run_id: { required: false, type: string }
 
 permissions:
   actions: write
@@ -167,15 +168,43 @@ permissions:
 
 jobs:
   complete:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     uses: RetireGolden/.github/.github/workflows/openrouter-profile-completion.yml@<ORG_WORKFLOW_SHA>
     with:
       pr_number: ${{ inputs.pr_number || '' }}
-      source_run_id: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
+      source_run_id: ${{ inputs.source_run_id || (github.event.workflow_run.id && format('{0}', github.event.workflow_run.id)) || '' }}
 ```
 
 The completion consumer job id must be `complete` so proof job names resolve
 as `complete / profile #<n> <digest>`.
+
+### Completion delivery after bot dispatches
+
+GitHub suppresses downstream `workflow_run` events after reviews dispatched
+with `GITHUB_TOKEN`. Its documented `workflow_dispatch` exception lets us wake
+the next workflow explicitly without another token or a model rerun. See
+[GitHub's workflow triggering rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+After a bot-dispatched review, a final notification job dispatches
+`openrouter-profile-completion.yml` on the default branch with `source_run_id`.
+The receiver briefly waits for the source run to become terminal, then validates
+its provenance and checks current review receipts. After proof publication,
+a bot-dispatched completion similarly wakes `openrouter-ci-broker.yml` when
+installed. Human-triggered reviews retain their native completion events.
+
+Consumers with a CI broker must accept a required string `source_run_id` on
+`workflow_dispatch`, run only on the default branch, wait for that profile run
+to finish, and verify its registered workflow ID and path before running their
+existing exact-head clean-review and profile-proof checks. A source ID is only
+a wake-up hint. It is never permission to add `run-ci` or start billed CI.
+Consumers without a CI broker need only the completion caller above.
+
+Delivery jobs are best effort: a failed notification does not invalidate a
+completed review or an otherwise valid proof. Missing or invalid profile
+evidence still blocks CI. If a notification fails, inspect its job log and
+manually dispatch the destination on the default branch with the completed
+source run ID. Retry profile completion or the broker, not the paid review.
+The bounded wait applies to notification delivery, not model review time.
 
 ### Security boundary
 
@@ -191,7 +220,7 @@ git clone --no-checkout https://github.com/FlyOverCoderKY/openrouter-pr-review-a
 git -C .trusted-review-action checkout 188cd5557765c858a37c1da78960cd353bcbcd60
 export PYTHONPATH="$PWD/.trusted-review-action/src"
 uv run --with jq --with pyyaml python -m unittest discover -s tests
-node --test tests/profile-consumer.test.mjs
+node --test tests/profile-consumer.test.mjs tests/workflow-wakeup.test.mjs
 ```
 
 `scripts/profile_consumer.mjs` is the shared Node validator used by existing

@@ -160,3 +160,32 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PROOF_MATRIX_JSON: ${{ needs.plan.outputs.matrix }}
         run: python3 -P -m scripts.profile_gate publish
+
+  notify-ci-broker:
+    # A delivery failure must not invalidate a paid review or a valid proof.
+    # The destination gate stays closed; its manual dispatch can retry delivery.
+    continue-on-error: true
+    name: Notify CI broker after a bot dispatch
+    needs: [plan, proof, publish]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout the trusted notification helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: RetireGolden/.github
+          ref: ${{ needs.plan.outputs.org_sha }}
+          path: .trusted-review-org
+          persist-credentials: false
+      - name: Wake the default-branch CI broker when installed
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { dispatchWorkflowWake } = await import(`${process.env.GITHUB_WORKSPACE}/.trusted-review-org/scripts/workflow_wakeup.mjs`)
+            await dispatchWorkflowWake(github, core, context, 'openrouter-ci-broker.yml', true)

@@ -1140,6 +1140,32 @@ def _plan_one(
     return None
 
 
+def _wait_for_source_run(
+    client: ProfileGitHub, verifier: Callable[[Mapping[str, Any]], VerifiedRun]
+) -> None:
+    """A bot's explicit wake can arrive just before its notifying run completes."""
+    run_id = _positive(_env("SOURCE_RUN_ID"), "SOURCE_RUN_ID")
+    if run_id == _positive(_env("GITHUB_RUN_ID"), "GITHUB_RUN_ID"):
+        raise GateError("completion cannot wait on itself")
+    deadline = time.monotonic() + 90
+    while True:
+        run = client._api(
+            f"/repos/{client.config.owner}/{client.config.name}/actions/runs/{run_id}"
+        )
+        if not isinstance(run, Mapping):
+            raise GateError("source run is invalid")
+        verifier(run)  # Reject untrusted sources before waiting or writing statuses.
+        status = run.get("status")
+        if status == "completed":
+            return
+        if status not in {"queued", "in_progress", "waiting", "pending", "requested"}:
+            raise GateError("source run has an invalid status")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise GateError("source run did not complete before the wake deadline; rerun profile completion")
+        time.sleep(min(3, remaining))
+
+
 def _source_pr(
     client: ProfileGitHub, verifier: Callable[[Mapping[str, Any]], VerifiedRun]
 ) -> int:
@@ -1173,6 +1199,8 @@ def plan(
             "completion workflow is not running at live default branch head"
         )
     historical = _historical_verifier(bare, bare.config.default_branch, main_sha)
+    if os.environ.get("SOURCE_RUN_ID"):
+        _wait_for_source_run(bare, historical)
     if one_pr is None and os.environ.get("SWEEP_OPEN_PRS") == "true":
         # Validate event provenance before using the event to wake a sweep.
         if os.environ.get("SOURCE_RUN_ID"):

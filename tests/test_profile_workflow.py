@@ -26,6 +26,28 @@ def step_named(steps, name):
 
 
 class ProfileWorkflowContractTests(unittest.TestCase):
+    def test_bot_notifications_wait_for_all_source_jobs_and_use_trusted_source(self):
+        for workflow, job_id, needs, source, target in (
+            (REVIEW, 'notify-profile-completion',
+             ['review-config', 'openrouter-first-pass', 'openrouter-follow-up', 'openrouter-first-pass-gate'],
+             'review-config', 'openrouter-profile-completion.yml'),
+            (COMPLETION, 'notify-ci-broker', ['plan', 'proof', 'publish'],
+             'plan', 'openrouter-ci-broker.yml'),
+        ):
+            job = workflow['jobs'][job_id]
+            self.assertEqual(job['needs'], needs)
+            self.assertEqual(job['continue-on-error'], 'true')
+            self.assertEqual(job['permissions'], {'actions': 'write', 'contents': 'read'})
+            self.assertIn("github.event_name == 'workflow_dispatch'", job['if'])
+            self.assertIn("github.actor == 'github-actions[bot]'", job['if'])
+            self.assertIn('always()', job['if'])
+            checkout = job['steps'][0]['with']
+            self.assertEqual(checkout['repository'], 'RetireGolden/.github')
+            self.assertEqual(checkout['ref'], '${{ needs.' + source + '.outputs.org_sha }}')
+            self.assertEqual(checkout['persist-credentials'], 'false')
+            self.assertIn(target, job['steps'][1]['with']['script'])
+        self.assertIn('inputs.review_profiles_enabled', REVIEW['jobs']['notify-profile-completion']['if'])
+
     def test_prepared_context_path_and_digest_are_shared_between_setup_and_review(self):
         for job_id in ('openrouter-first-pass', 'openrouter-follow-up'):
             steps = job_steps(REVIEW, job_id)
