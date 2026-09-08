@@ -1,0 +1,6 @@
+{
+  "openai/gpt-6-astra": {
+    "provider": "openai/flex",
+    "service_tier": "flex"
+  }
+}

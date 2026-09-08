@@ -1,0 +1,162 @@
+# Runs only through a default-branch consumer workflow. Never execute PR code.
+name: OpenRouter profile completion
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        type: string
+        required: false
+        default: ''
+      source_run_id:
+        type: string
+        required: false
+        default: ''
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+  statuses: write
+jobs:
+  plan:
+    name: Plan current profile proof
+    # Serialize refresh decisions. A replaced pending plan is covered by the
+    # next plan's complete open-PR sweep; running proof jobs are never cancelled.
+    concurrency:
+      group: openrouter-profile-plan-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      org_sha: ${{ steps.source.outputs.sha }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_work: ${{ steps.plan.outputs.has_work }}
+    steps:
+      - name: Resolve this reusable workflow's immutable source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          source_sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --jq '[.referenced_workflows[] | select(.path | startswith("RetireGolden/.github/.github/workflows/openrouter-profile-completion.yml@")) | .sha] | unique | if length == 1 then .[0] else error("ambiguous completion source") end')"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+      - name: Checkout inert default-branch history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout trusted profile coordinator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: RetireGolden/.github
+          ref: ${{ steps.source.outputs.sha }}
+          path: .trusted-review-org
+          persist-credentials: false
+      - name: Checkout trusted review contracts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FlyOverCoderKY/openrouter-pr-review-action
+          ref: 6ef4bf920243c202c9a59276e4e4e5f016157a90
+          path: .trusted-review-action
+          persist-credentials: false
+      - name: Resolve current profile evidence
+        id: plan
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.trusted-review-org:${{ github.workspace }}/.trusted-review-action/src
+          SOURCE_WORKSPACE: ${{ github.workspace }}
+          PROFILE_ROOT: ${{ github.workspace }}/.trusted-review-org
+          ORG_WORKFLOW_SHA: ${{ steps.source.outputs.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SWEEP_OPEN_PRS: 'true'
+        run: python3 -P -m scripts.profile_gate plan
+  proof:
+    needs: plan
+    if: needs.plan.outputs.has_work == 'true'
+    name: 'profile #${{ matrix.pr_number }} ${{ matrix.receipt_digest }}'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout inert default-branch history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout trusted profile coordinator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: RetireGolden/.github
+          ref: ${{ needs.plan.outputs.org_sha }}
+          path: .trusted-review-org
+          persist-credentials: false
+      - name: Checkout trusted review contracts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FlyOverCoderKY/openrouter-pr-review-action
+          ref: 6ef4bf920243c202c9a59276e4e4e5f016157a90
+          path: .trusted-review-action
+          persist-credentials: false
+      - name: Confirm current profile evidence
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.trusted-review-org:${{ github.workspace }}/.trusted-review-action/src
+          SOURCE_WORKSPACE: ${{ github.workspace }}
+          PROFILE_ROOT: ${{ github.workspace }}/.trusted-review-org
+          ORG_WORKFLOW_SHA: ${{ needs.plan.outputs.org_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ matrix.pr_number }}
+          EXPECTED_RECEIPT_DIGEST: ${{ matrix.receipt_digest }}
+        run: python3 -P -m scripts.profile_gate confirm
+  publish:
+    needs: [plan, proof]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.has_work == 'true'
+    name: Publish completed profile proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Checkout inert default-branch history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout trusted profile coordinator
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: RetireGolden/.github
+          ref: ${{ needs.plan.outputs.org_sha }}
+          path: .trusted-review-org
+          persist-credentials: false
+      - name: Checkout trusted review contracts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FlyOverCoderKY/openrouter-pr-review-action
+          ref: 6ef4bf920243c202c9a59276e4e4e5f016157a90
+          path: .trusted-review-action
+          persist-credentials: false
+      - name: Publish only completed current proofs
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.trusted-review-org:${{ github.workspace }}/.trusted-review-action/src
+          SOURCE_WORKSPACE: ${{ github.workspace }}
+          PROFILE_ROOT: ${{ github.workspace }}/.trusted-review-org
+          ORG_WORKFLOW_SHA: ${{ needs.plan.outputs.org_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PROOF_MATRIX_JSON: ${{ needs.plan.outputs.matrix }}
+        run: python3 -P -m scripts.profile_gate publish
