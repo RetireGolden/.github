@@ -381,7 +381,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 6ef4bf920243c202c9a59276e4e4e5f016157a90
+          ref: 4fe6e668c9352b3f2a65254c4900d6443b5279e2
           path: .trusted-review-action
           persist-credentials: false
       - name: Resolve pending review request
@@ -400,7 +400,7 @@ jobs:
       - name: Prepare shared review snapshot
         id: profile_setup
         if: inputs.review_profiles_enabled
-        uses: FlyOverCoderKY/openrouter-pr-review-action@6ef4bf920243c202c9a59276e4e4e5f016157a90 # action#36 profiles
+        uses: FlyOverCoderKY/openrouter-pr-review-action@4fe6e668c9352b3f2a65254c4900d6443b5279e2 # action#36 profiles
         with:
           role: setup
           github_token: ${{ github.token }}
@@ -448,7 +448,7 @@ jobs:
         id: openrouter_first
         if: steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@6ef4bf920243c202c9a59276e4e4e5f016157a90 # action#36 profiles
+        uses: FlyOverCoderKY/openrouter-pr-review-action@4fe6e668c9352b3f2a65254c4900d6443b5279e2 # action#36 profiles
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -825,7 +825,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 6ef4bf920243c202c9a59276e4e4e5f016157a90
+          ref: 4fe6e668c9352b3f2a65254c4900d6443b5279e2
           path: .trusted-review-action
           persist-credentials: false
       - name: Resolve pending review request
@@ -844,7 +844,7 @@ jobs:
       - name: Prepare shared review snapshot
         id: profile_setup
         if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true'
-        uses: FlyOverCoderKY/openrouter-pr-review-action@6ef4bf920243c202c9a59276e4e4e5f016157a90 # action#36 profiles
+        uses: FlyOverCoderKY/openrouter-pr-review-action@4fe6e668c9352b3f2a65254c4900d6443b5279e2 # action#36 profiles
         with:
           role: setup
           github_token: ${{ github.token }}
@@ -892,7 +892,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true' && steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@6ef4bf920243c202c9a59276e4e4e5f016157a90 # action#36 profiles
+        uses: FlyOverCoderKY/openrouter-pr-review-action@4fe6e668c9352b3f2a65254c4900d6443b5279e2 # action#36 profiles
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
