@@ -382,7 +382,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 188cd5557765c858a37c1da78960cd353bcbcd60
+          ref: 5bb16c7a5ba87a802d7884ccbfa5e99d10978a49
           path: .trusted-review-action
           persist-credentials: false
       - name: Resolve pending review request
@@ -401,7 +401,7 @@ jobs:
       - name: Prepare shared review snapshot
         id: profile_setup
         if: inputs.review_profiles_enabled
-        uses: FlyOverCoderKY/openrouter-pr-review-action@188cd5557765c858a37c1da78960cd353bcbcd60 # action#39 active-response completion
+        uses: FlyOverCoderKY/openrouter-pr-review-action@5bb16c7a5ba87a802d7884ccbfa5e99d10978a49 # action#40 settled-dispute receipt validation
         with:
           role: setup
           github_token: ${{ github.token }}
@@ -449,7 +449,7 @@ jobs:
         id: openrouter_first
         if: steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@188cd5557765c858a37c1da78960cd353bcbcd60 # action#39 active-response completion
+        uses: FlyOverCoderKY/openrouter-pr-review-action@5bb16c7a5ba87a802d7884ccbfa5e99d10978a49 # action#40 settled-dispute receipt validation
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -826,7 +826,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 188cd5557765c858a37c1da78960cd353bcbcd60
+          ref: 5bb16c7a5ba87a802d7884ccbfa5e99d10978a49
           path: .trusted-review-action
           persist-credentials: false
       - name: Resolve pending review request
@@ -845,7 +845,7 @@ jobs:
       - name: Prepare shared review snapshot
         id: profile_setup
         if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true'
-        uses: FlyOverCoderKY/openrouter-pr-review-action@188cd5557765c858a37c1da78960cd353bcbcd60 # action#39 active-response completion
+        uses: FlyOverCoderKY/openrouter-pr-review-action@5bb16c7a5ba87a802d7884ccbfa5e99d10978a49 # action#40 settled-dispute receipt validation
         with:
           role: setup
           github_token: ${{ github.token }}
@@ -893,7 +893,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true' && steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@188cd5557765c858a37c1da78960cd353bcbcd60 # action#39 active-response completion
+        uses: FlyOverCoderKY/openrouter-pr-review-action@5bb16c7a5ba87a802d7884ccbfa5e99d10978a49 # action#40 settled-dispute receipt validation
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:

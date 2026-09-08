@@ -11,7 +11,7 @@ from unittest import mock
 
 from or_pr_review.collect import CollectedReview, DiffPlan, Truncation
 from or_pr_review.models import parse_model_routes
-from or_pr_review.loop import Ledger, LoopState, encode_ledger
+from or_pr_review.loop import Ledger, LedgerFinding, LoopState, encode_ledger
 from or_pr_review.profile_evidence import canonical_receipt, parse_receipt
 from or_pr_review.publish import render_review_parts
 from or_pr_review.review_context import (
@@ -501,6 +501,27 @@ class ReceiptEvidenceTests(unittest.TestCase):
         items = self.reader(store).collect(PR, [self.review_record(bundle)])
         self.assertEqual(items[0].source.head_sha, MAIN_SHA)
         self.assertEqual(items[0].receipt.head_sha, SHA)
+
+    def test_collect_dispatch_preserves_settled_disputes_without_accepting_open_findings(self):
+        for include_open in (False, True):
+            with self.subTest(include_open=include_open):
+                store = self.make_store()
+                bundle = bundle_for(head_sha=SHA, mode="verify")
+                findings = [LedgerFinding("r1-1", "risk", "src/a.py", 1, "Rebutted", "Evidence", "disputed")]
+                if include_open:
+                    findings.append(LedgerFinding("r1-2", "bug", "src/b.py", 2, "Unresolved", "Evidence", "open"))
+                lines = bundle["body"].splitlines()
+                lines[1] = encode_ledger(Ledger(3, tuple(findings), SHA, GENERATION), repo=REPO, pr_number=PR)
+                bundle["body"] = "\n".join(lines)
+                self.install_bundle(store, bundle, head_sha=MAIN_SHA, event="workflow_dispatch", head_branch="main")
+                if include_open:
+                    with self.assertRaises(ProfileCompletionError):
+                        self.reader(store).collect(PR, [self.review_record(bundle)])
+                else:
+                    items = self.reader(store).collect(PR, [self.review_record(bundle)])
+                    self.assertEqual(len(items), 1)
+                    self.assertEqual(items[0].receipt.verdict, "clean")
+                    self.assertEqual(items[0].receipt.head_sha, SHA)
 
     def test_collect_dispatch_accepts_equal_source_and_pr_head(self):
         store = self.make_store()
