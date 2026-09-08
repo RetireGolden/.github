@@ -26,7 +26,7 @@ added in a PR becomes authoritative only after it merges.
 
 Use concise prose to describe repository contracts, with nested files for
 component-specific invariants. See the action's
-[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/188cd5557765c858a37c1da78960cd353bcbcd60/docs/review-policy.md).
+[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/5bb16c7a5ba87a802d7884ccbfa5e99d10978a49/docs/review-policy.md).
 In this guidance rollout, `profile: code` and `profile: docs` are descriptive;
 they do not select models by themselves.
 
@@ -44,6 +44,10 @@ migration lands. Turning it on is optional and requires **both**:
 The trusted registry in `review-profiles.json` is workflow configuration, not
 repository policy and not merge authority. It does not grant CI or bypass
 branch protection.
+
+A clean review can retain settled `disputed` findings in its ledger so later
+rounds remember the rebuttals. Profile receipt validation rejects open findings;
+retained settled findings do not block proof or authorize unresolved GitHub threads.
 
 ### Baseline panels
 
@@ -188,7 +192,7 @@ Local workflow contract checks:
 ```sh
 # Obtain the pinned public action contracts outside product source.
 git clone --no-checkout https://github.com/FlyOverCoderKY/openrouter-pr-review-action .trusted-review-action
-git -C .trusted-review-action checkout 188cd5557765c858a37c1da78960cd353bcbcd60
+git -C .trusted-review-action checkout 5bb16c7a5ba87a802d7884ccbfa5e99d10978a49
 export PYTHONPATH="$PWD/.trusted-review-action/src"
 uv run --with jq --with pyyaml python -m unittest discover -s tests
 node --test tests/profile-consumer.test.mjs

@@ -17,7 +17,7 @@ WORKFLOW = yaml.load(
 )
 JOBS = WORKFLOW['jobs']
 CONFIG = JOBS['review-config']
-ACTION_PIN = '188cd5557765c858a37c1da78960cd353bcbcd60'
+ACTION_PIN = '5bb16c7a5ba87a802d7884ccbfa5e99d10978a49'
 SCRIPT = next(step['run'] for step in CONFIG['steps'] if step.get('id') == 'config')
 REGISTRY = json.dumps(
     json.loads((ROOT / 'review-profiles.json').read_text(encoding='utf-8')),
