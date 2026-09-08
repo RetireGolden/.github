@@ -97,8 +97,8 @@ function reviewBody(receipt, digest) {
     '## OpenRouter pull-request review',
     '',
     '**Verdict:** `clean`',
-    '**Scope:** `full-pr` (full-pr)',
-    '**Mode:** `initial`',
+    `**Scope:** \`${receipt.scope}\` (full-pr)`,
+    `**Mode:** \`${receipt.mode}\``,
     `**Commit:** \`${HEAD_SHA}\``,
     `${RECEIPT_MARKER_PREFIX}${marker} -->`,
     '**Profile:** satisfied',
@@ -314,6 +314,14 @@ function authorizeContext(store, overrides = {}) {
 }
 
 describe('authorizeProfileReceipt', () => {
+  it('authorizes rebase verification with current proof and rejects an initial rebase', async () => {
+    for (const mode of ['verify', 'initial']) {
+      const { github, store } = buildStore({ receiptOverrides: { scope: 'rebase', mode } });
+      const result = await authorizeProfileReceipt(github, authorizeContext(store));
+      assert.equal(result.authorized, mode === 'verify');
+    }
+  });
+
   it('authorizes a current valid proof', async () => {
     const { github, store } = buildStore();
     const result = await authorizeProfileReceipt(github, authorizeContext(store));

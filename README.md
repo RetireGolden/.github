@@ -5,8 +5,13 @@ Organization-wide defaults for [RetireGolden](https://github.com/RetireGolden).
 Manual OpenRouter reruns review the full PR and continue its existing review
 ledger, including finding IDs and rebuttals. Without a ledger they seed an
 initial review. The optional `reset_review` boolean explicitly starts over;
-leave it `false` for ordinary reruns. Pushes retain their latest-commit scope.
-The stable completion gate recognizes a completed full-PR verification as
+leave it `false` for ordinary reruns. Pushes normally retain latest-commit scope;
+a rebase or force-push selects `rebase` scope for a full diff at all severities,
+with historical reviews and replies. It preserves finding IDs and round
+progression, checks whether earlier disputes still hold, and reopens them only
+with evidence from current code. Fixed or retired findings remain historical
+context. The action bounds this narrative and freezes it across prepared lanes.
+The stable completion gate recognizes a completed rebase or full-PR verification as
 well as an initial review, while retaining current-head and run-output checks.
 This completion gate is separate from each repository's clean-review CI gate.
 
@@ -26,7 +31,7 @@ added in a PR becomes authoritative only after it merges.
 
 Use concise prose to describe repository contracts, with nested files for
 component-specific invariants. See the action's
-[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/5bb16c7a5ba87a802d7884ccbfa5e99d10978a49/docs/review-policy.md).
+[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/212775ffea22e806cddcb706c73a3df26fbcb6d0/docs/review-policy.md).
 In this guidance rollout, `profile: code` and `profile: docs` are descriptive;
 they do not select models by themselves.
 
@@ -234,7 +239,7 @@ Local workflow contract checks:
 ```sh
 # Obtain the pinned public action contracts outside product source.
 git clone --no-checkout https://github.com/FlyOverCoderKY/openrouter-pr-review-action .trusted-review-action
-git -C .trusted-review-action checkout 5bb16c7a5ba87a802d7884ccbfa5e99d10978a49
+git -C .trusted-review-action checkout 212775ffea22e806cddcb706c73a3df26fbcb6d0
 export PYTHONPATH="$PWD/.trusted-review-action/src"
 uv run --with jq --with pyyaml python -m unittest discover -s tests
 node --test tests/profile-consumer.test.mjs tests/workflow-wakeup.test.mjs

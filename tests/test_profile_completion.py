@@ -184,7 +184,7 @@ def bundle_for(
         "topic",
         DiffPlan(
             scope,
-            "full-pr" if scope == "full-pr" else "commit-range",
+            "full-pr" if scope in {"full-pr", "rebase"} else "commit-range",
             BASE if scope != "full-pr" else BASE,
             head_sha,
             None,
@@ -473,6 +473,9 @@ class ReceiptEvidenceTests(unittest.TestCase):
             ("standard", "baseline", "initial", "full-pr", JOB_INITIAL),
             ("deep", "manual", "initial", "full-pr", JOB_INITIAL),
             ("standard", "baseline", "verify", "latest-commit", JOB_VERIFY),
+            ("standard", "baseline", "verify", "full-pr", JOB_VERIFY),
+            ("standard", "baseline", "verify", "rebase", JOB_VERIFY),
+            ("deep", "manual", "verify", "rebase", JOB_VERIFY),
         ):
             with self.subTest(level=level, mode=mode):
                 store = self.make_store()
