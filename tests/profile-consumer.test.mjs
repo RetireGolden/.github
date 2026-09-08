@@ -521,6 +521,43 @@ describe('authorizeProfileReceipt', () => {
     assert.equal(result.authorized, true);
   });
 
+  it('allows an older branch-caller audit before a newer trusted profile proof', async () => {
+    const { github, store } = buildStore({
+      reviewRuns: [
+        reviewRun(),
+        reviewRun({ id: 101, referenced_workflows: [], updated_at: '2024-01-02T09:55:00Z' }),
+      ],
+    });
+    const result = await authorizeProfileReceipt(github, authorizeContext(store));
+    assert.equal(result.authorized, true);
+  });
+
+  for (const status of ['queued', 'in_progress', 'waiting', 'pending', 'requested']) {
+    it(`blocks a matching untrusted ${status} run even when it predates the proof`, async () => {
+      const { github, store } = buildStore({
+        reviewRuns: [reviewRun(), reviewRun({
+          id: 101, status, conclusion: null, referenced_workflows: [],
+          updated_at: '2024-01-02T09:55:00Z',
+        })],
+      });
+      const result = await authorizeProfileReceipt(github, authorizeContext(store));
+      assert.equal(result.authorized, false);
+      assert.match(result.reason, /still active/i);
+    });
+  }
+
+  for (const updatedAt of [PROOF_STARTED, '2024-01-02T10:01:00Z', 'invalid']) {
+    it(`blocks a matching untrusted completion at ${updatedAt}`, async () => {
+      const { github, store } = buildStore({
+        reviewRuns: [reviewRun(), reviewRun({
+          id: 101, referenced_workflows: [], updated_at: updatedAt,
+        })],
+      });
+      const result = await authorizeProfileReceipt(github, authorizeContext(store));
+      assert.equal(result.authorized, false);
+    });
+  }
+
   it('does not attribute a workflow_dispatch on main via empty pull_requests', async () => {
     const { github, store } = buildStore({
       reviewRuns: [
