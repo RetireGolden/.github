@@ -23,6 +23,10 @@ REGISTRY = json.dumps(
     json.loads((ROOT / 'review-profiles.json').read_text(encoding='utf-8')),
     separators=(',', ':'),
 )
+SOL_ROUTE = json.dumps(
+    {'openai/gpt-6-sol': json.loads((ROOT / 'review-model-routes.json').read_text(encoding='utf-8'))['openai/gpt-6-sol']},
+    separators=(',', ':'),
+)
 ROUTES = json.dumps(
     json.loads((ROOT / 'review-model-routes.json').read_text(encoding='utf-8')),
     separators=(',', ':'),
@@ -53,13 +57,13 @@ class ReviewConfigurationTests(unittest.TestCase):
 
     def test_standing_rosters_and_follow_up_effort_are_preserved(self):
         cases = [
-            ('RetireGolden', 'x-ai/grok-4.6,z-ai/glm-5.3-flash', 'high'),
-            ('RetireGolden-Pro', 'x-ai/grok-4.6,z-ai/glm-5.3-flash', 'high'),
-            ('RetireGolden-MCP', 'x-ai/grok-4.6,z-ai/glm-5.3-flash', 'high'),
+            ('RetireGolden', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'high'),
+            ('RetireGolden-Pro', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'high'),
+            ('RetireGolden-MCP', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'high'),
             ('RetireGolden-Docs', 'z-ai/glm-5.3-flash', 'medium'),
-            ('retiregolden.org', 'x-ai/grok-4.6,z-ai/glm-5.3-flash', 'high'),
-            ('RetireBench', 'x-ai/grok-4.6,z-ai/glm-5.3-flash', 'medium'),
-            ('unlisted', 'x-ai/grok-4.6', 'low'),
+            ('retiregolden.org', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'high'),
+            ('RetireBench', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'medium'),
+            ('unlisted', 'openai/gpt-6-sol', 'low'),
         ]
         for name, models, effort in cases:
             with self.subTest(repository=name):
@@ -68,7 +72,8 @@ class ReviewConfigurationTests(unittest.TestCase):
                 self.assertIn('models=' + models + '\n', output)
                 self.assertIn('effort=' + effort + '\n', output)
                 self.assertEqual(output.count('Pin-bump PRs:'), 1)
-                self.assertIn('model_routes={}\n', output)
+                routes = SOL_ROUTE if 'openai/gpt-6-sol' in models else '{}'
+                self.assertIn('model_routes=' + routes + '\n', output)
                 self.assertNotIn('astra', output.lower())
         proc, output = self.run_config('RetireGolden/RetireGolden', follow_up=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
