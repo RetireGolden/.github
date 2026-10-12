@@ -63,7 +63,7 @@ all current caller, pin, receipt, and proof checks.
 
 | Profile | Standard (auto) | Deep (maintainer dispatch) |
 | --- | --- | --- |
-| `code` | Grok required, GLM optional | Grok required, GLM optional, Astra/Flex required |
+| `code` | Sol/Azure required, GLM optional | Sol/Azure required, GLM optional, Astra/Flex required |
 | `docs` | GLM required | GLM required, Astra/Flex required |
 
 Both levels retain the existing 1,080-second lane ceiling and 1,320-second job
@@ -82,7 +82,7 @@ DNS stalls and endless responses bounded. Failed-lane/checkpoint diagnostics
 distinguish connection setup, socket inactivity, and elapsed deadline expiry.
 
 `review-model-routes.json` supplies provider routing for exact lane slugs (for
-example Astra via `openai/flex`). Deep raises the minimum panel; it retains
+example Astra via `openai/flex` and Sol pinned to `azure`). Deep raises the minimum panel; it retains
 the finding ledger and continues a full-PR review. There is no automatic risk
 classifier yet — deep is requested explicitly.
 

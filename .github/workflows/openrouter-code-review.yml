@@ -39,7 +39,7 @@
 #   FlyOverCoderKY/openrouter-pr-review-action (live pin on the
 #   uses: lines below; do not restate the version here),
 #   models from the shared configuration job (the product repos use the
-#   requested grok+glm two-lane roster with the recall-safe judge;
+#   requested sol+glm two-lane roster with the recall-safe judge;
 #   RetireGolden-Docs uses a GLM-only lane),
 #   review_scope: full-pr, review_mode: auto (continues any existing ledger), existing per-repo
 #   effort, max_tool_turns: "50". The action default is now 50
@@ -244,27 +244,27 @@ jobs:
           # This configuration is part of the pinned reusable workflow, never PR code.
           policies = {
               "RetireGolden/RetireGolden": {
-                  "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
                   "effort": "high",
                   "guidance": ""
               },
               "RetireGolden/RetireGolden-MCP": {
-                  "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
                   "effort": "high",
                   "guidance": ""
               },
               "RetireGolden/retiregolden.org": {
-                  "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
                   "effort": "high",
                   "guidance": "Run a full review, with particular attention to calculation correctness, public contracts, security, and release integrity. Obey AGENTS.md."
               },
               "RetireGolden/RetireGolden-Pro": {
-                  "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
                   "effort": "high",
                   "guidance": ""
               },
               "RetireGolden/RetireBench": {
-                  "models": "x-ai/grok-4.6,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
                   "effort": "medium",
                   "guidance": "Major issues and security only. This is not a full AGENTS.md audit."
               },
@@ -274,14 +274,19 @@ jobs:
                   "guidance": ""
               },
               "*": {
-                  "models": "x-ai/grok-4.6",
+                  "models": "openai/gpt-6-sol",
                   "effort": "low",
-                  "guidance": "This repository is not on the HIGH or MEDIUM Grok review list. Do not run a high-effort or full AGENTS.md audit. Flag only obvious defects and security issues."
+                  "guidance": "This repository is not on the HIGH or MEDIUM review list. Do not run a high-effort or full AGENTS.md audit. Flag only obvious defects and security issues."
               }
           }
           common = 'Pin-bump PRs: when the change advances a SHA-pinned uses: reference (org reusable workflow or action) and the PR body links the upstream commit or release, do not flag the external SHA as unverifiable from this checkout. No checkout can verify a cross-repo pin, and a wrong or workflow-less ref fails at workflow startup rather than silently. Verify what is checkable locally instead: the ref is an exact 40-hex commit (never a branch or mutable tag), the pin comment names the upstream PR and pinned version per org convention, permissions and secrets wiring are unchanged, and any caller contract test that encodes the pin is updated.'
           policy = policies.get(os.environ["GITHUB_REPOSITORY"], policies["*"])
-          registry, routes = "", "{}"
+          # Legacy (non-profile) callers get the same pinned route for their roster;
+          # tests keep this in step with review-model-routes.json.
+          legacy_routes = {"openai/gpt-6-sol": {"provider": "azure"}}
+          roster = policy["models"].split(",")
+          registry = ""
+          routes = json.dumps({m: r for m, r in legacy_routes.items() if m in roster}, separators=(",", ":"))
           if enabled:
               root = Path(os.environ["PROFILE_ROOT"])
               registry = json.dumps(json.loads((root / "review-profiles.json").read_text()), separators=(",", ":"))
