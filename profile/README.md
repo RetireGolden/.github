@@ -8,7 +8,7 @@ We believe everyone should be able to plan their retirement without handing thei
 
 ## 🔗 Social
 
-[YouTube](https://www.youtube.com/@RetireGolden) · [X](https://x.com/RetireGoldenLLC) · [LinkedIn](https://www.linkedin.com/company/retiregolden/) · [Facebook](https://www.facebook.com/profile.php?id=61591546122081) · [Reddit](https://www.reddit.com/r/retiregolden)
+[YouTube](https://www.youtube.com/@RetireGolden) · [X](https://x.com/RetireGoldenLLC) · [LinkedIn](https://www.linkedin.com/company/retiregolden/) · [Facebook](https://www.facebook.com/retiregolden) · [Reddit](https://www.reddit.com/r/retiregolden)
 
 ---
 
