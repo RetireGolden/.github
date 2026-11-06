@@ -370,6 +370,52 @@ class RequestHistoryTests(unittest.TestCase):
         store["runs"][(100, 1)].update(event="workflow_dispatch", head_branch="main")
         self.assertEqual(self.reader(self.store_handler(store)).load(PR), (record,))
 
+    def with_target_base(self, handler, base="main"):
+        def wrapped(method, url, headers, cap, data):
+            if url == "https://api.github.com/graphql":
+                node = {
+                    "number": PR,
+                    "baseRefName": base,
+                    "headRepository": {"nameWithOwner": REPO},
+                    "timelineItems": {"totalCount": 0},
+                }
+                return response(
+                    {"data": {"repository": {"pullRequests": {"totalCount": 1, "nodes": [node]}}}}
+                )
+            return handler(method, url, headers, cap, data)
+
+        return wrapped
+
+    def test_pull_request_target_request_binds_the_run_head(self):
+        store = self.make_store()
+        record = record_payload()
+        self.install_run(store, 100, 1, record, artifact_name=primary_artifact_name(PR))
+        store["runs"][(100, 1)].update(event="pull_request_target", head_branch="topic")
+        handler = self.with_target_base(self.store_handler(store))
+        self.assertEqual(self.reader(handler).load(PR), (record,))
+        # A request accepted for another head than the run's PR head is rejected.
+        store = self.make_store()
+        self.install_run(store, 100, 1, record, head_sha=BASE, artifact_name=primary_artifact_name(PR))
+        store["runs"][(100, 1)].update(event="pull_request_target", head_branch="topic")
+        with self.assertRaises(ProfileRequestError):
+            self.reader(self.with_target_base(self.store_handler(store))).load(PR)
+        # A head branch that ever targeted another base cannot supply requests.
+        store = self.make_store()
+        self.install_run(store, 100, 1, record, artifact_name=primary_artifact_name(PR))
+        store["runs"][(100, 1)].update(event="pull_request_target", head_branch="topic")
+        with self.assertRaises(ProfileRequestError):
+            self.reader(self.with_target_base(self.store_handler(store), base="release")).load(PR)
+
+    def test_repository_dispatch_request_requires_default_branch(self):
+        store = self.make_store()
+        record = record_payload()
+        self.install_run(store, 100, 1, record, head_sha=BASE, artifact_name=primary_artifact_name(PR))
+        store["runs"][(100, 1)].update(event="repository_dispatch", head_branch="main")
+        self.assertEqual(self.reader(self.store_handler(store)).load(PR), (record,))
+        store["runs"][(100, 1)].update(head_branch="topic")
+        with self.assertRaises(ProfileRequestError):
+            self.reader(self.store_handler(store)).load(PR)
+
     def test_load_first_acceptance_and_carry(self):
         store = self.make_store()
         deep = record_payload(run_id=100, accepted_at_ms=ACCEPT_MS)

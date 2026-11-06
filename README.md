@@ -158,6 +158,108 @@ Minimum secret: `OPENROUTER_API_KEY` passed explicitly (never `secrets: inherit`
 
 Branch protection should require `review / openrouter-first-pass-gate`.
 
+### Trusted default-branch review callers (optional)
+
+The same review workflow also accepts two default-branch caller events. Existing
+`pull_request` and `workflow_dispatch` callers need no change.
+
+- `pull_request_target` (`opened`, `reopened`, `ready_for_review`,
+  `synchronize`) keeps the `pull_request` split: `synchronize` is a follow-up,
+  the others are first passes. It runs only when the PR targets the default
+  branch, so the caller file comes from that branch. GitHub records these runs,
+  and their native job checks, on the PR head commit.
+- `repository_dispatch` from the default branch is a first pass, like
+  `workflow_dispatch`. A called workflow sees no `github.event.inputs`, and this
+  workflow never reads `client_payload`; map payload fields into `with:`.
+  `expected_head_sha` makes the review and gate fail closed when the live PR
+  head differs from the head the dispatcher saw. Explicit `deep` and `cancel`
+  levels still require a maintainer and the default branch.
+
+Under both events the reviewed head is checked out as inert data in jobs that
+hold the OpenRouter key. No step runs its code, hooks, submodules, LFS
+filters, package scripts or configuration, and a commit that contains the
+reserved `.trusted-review-org` or `.trusted-review-action` paths is refused.
+
+Default-branch dispatch runs attach native job checks to the default-branch
+tip, so the required `review / openrouter-first-pass-gate` never reaches the PR
+head on its own. `openrouter-review-gate-check.yml` repeats the gate result
+(success or failure) as a GitHub Actions check run on the exact head the gate
+evaluated. It reads the `gate_*` outputs of the review workflow, publishes only
+from default-branch runs, skips heads that moved, and in `auto` mode leaves
+pull-request runs to their native check. It is a separate entry point because
+it is the only job that needs `checks: write`: GitHub checks reusable-job
+permissions against the caller before runtime conditions, and current callers
+do not grant that scope.
+
+```yaml
+name: OpenRouter code review
+run-name: "${{ format('OpenRouter PR #{0}: {1}', github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number, github.event.client_payload.review_level || inputs.review_level || 'auto') }}"
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  repository_dispatch:
+    types: [openrouter-review]
+  workflow_dispatch:
+    inputs:
+      pr_number: { required: true, type: string }
+      review_level: { default: auto, type: choice, options: [auto, deep, cancel] }
+
+permissions:
+  actions: write
+  checks: write
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  review:
+    if: github.event_name != 'pull_request_target' || !github.event.pull_request.draft
+    uses: RetireGolden/.github/.github/workflows/openrouter-code-review.yml@<ORG_WORKFLOW_SHA>
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: write
+      statuses: write
+    with:
+      pr_number: ${{ github.event.pull_request.number || github.event.client_payload.pr_number || inputs.pr_number }}
+      review_level: ${{ github.event.client_payload.review_level || inputs.review_level || 'auto' }}
+      expected_head_sha: ${{ github.event.client_payload.head_sha || '' }}
+      review_profiles_enabled: false
+      review_policy: off
+  gate-check:
+    needs: review
+    if: always() && needs.review.outputs.gate_head_sha != ''
+    uses: RetireGolden/.github/.github/workflows/openrouter-review-gate-check.yml@<ORG_WORKFLOW_SHA>
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      pull-requests: read
+    with:
+      pr_number: ${{ needs.review.outputs.gate_pr_number }}
+      head_sha: ${{ needs.review.outputs.gate_head_sha }}
+      conclusion: ${{ needs.review.outputs.gate_conclusion }}
+      review_url: ${{ needs.review.outputs.gate_review_url }}
+```
+
+Keep the review job id `review`; profile evidence names its jobs
+`review / ...`. `gate_check_name` defaults to
+`review / openrouter-first-pass-gate`. Bot-sent `repository_dispatch` reviews
+wake profile completion the same way bot-sent `workflow_dispatch` reviews do.
+
+Profile evidence admits these events with the same bounds as before.
+`repository_dispatch` runs must be on the default branch, and their caller
+blob at the run's default-branch commit must match the trusted caller. A
+`pull_request_target` run reports the PR head rather than the commit whose
+caller ran. Evidence from it therefore requires every same-repository PR from
+that head branch to target the default branch with no recorded base change,
+the exact trusted reusable pin, a run head equal to the receipt head, and a PR
+whose head branch matches the run. A receipt for an older head never satisfies
+a newer one. If a PR was retargeted, push the change on a fresh branch.
+
 ### Thin completion caller (example)
 
 Runs only on the default branch. Never executes PR code.
@@ -242,7 +344,7 @@ git clone --no-checkout https://github.com/FlyOverCoderKY/openrouter-pr-review-a
 git -C .trusted-review-action checkout 212775ffea22e806cddcb706c73a3df26fbcb6d0
 export PYTHONPATH="$PWD/.trusted-review-action/src"
 uv run --with jq --with pyyaml python -m unittest discover -s tests
-node --test tests/profile-consumer.test.mjs tests/workflow-wakeup.test.mjs
+node --test tests/profile-consumer.test.mjs tests/workflow-wakeup.test.mjs tests/gate-check.test.mjs
 ```
 
 `scripts/profile_consumer.mjs` is the shared Node validator used by existing

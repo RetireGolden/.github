@@ -444,5 +444,152 @@ class ProfileGitHubTests(unittest.TestCase):
             ProfileGitHub._safe_artifact_url("https://user@127.0.0.1/zip")
 
 
+def head_pulls(*nodes, total=None):
+    """GraphQL payload for PRs that share one head branch."""
+    return {
+        "data": {
+            "repository": {
+                "pullRequests": {
+                    "totalCount": len(nodes) if total is None else total,
+                    "nodes": list(nodes),
+                }
+            }
+        }
+    }
+
+
+def head_pull(number=7, base="main", owner="RetireGolden/example", changes=0):
+    return {
+        "number": number,
+        "baseRefName": base,
+        "headRepository": None if owner is None else {"nameWithOwner": owner},
+        "timelineItems": {"totalCount": changes},
+    }
+
+
+class TrustedCallerEventTests(unittest.TestCase):
+    """pull_request_target and repository_dispatch admission in verify_run."""
+
+    def setUp(self):
+        self.config = TrustedWorkflow(
+            "RetireGolden", "example", "main", reusable_sha=PIN
+        )
+
+    def run_for(self, **overrides):
+        run = {
+            "id": RUN_ID,
+            "run_attempt": 1,
+            "workflow_id": 9,
+            "head_sha": SHA,
+            "head_branch": "topic",
+            "event": "pull_request_target",
+            "path": self.config.caller_path,
+            "repository": {"full_name": self.config.full_name},
+            "head_repository": {"full_name": self.config.full_name},
+            "referenced_workflows": [
+                {"path": f"{self.config.reusable_path}@{PIN}", "sha": PIN}
+            ],
+            "status": "completed",
+            "conclusion": "success",
+        }
+        run.update(overrides)
+        return run
+
+    def client(self, graphql=None, blob_sha=SHA):
+        self.calls = []
+
+        def handler(method, url, headers, cap, data):
+            self.calls.append((method, url, data))
+            if url == "https://api.github.com/graphql":
+                self.assertEqual(method, "POST")
+                payload = json.loads(data.decode())
+                self.assertIn("headRefName: $head", payload["query"])
+                self.assertIn("BASE_REF_CHANGED_EVENT", payload["query"])
+                self.assertIn("AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT", payload["query"])
+                self.assertEqual(
+                    payload["variables"],
+                    {"owner": "RetireGolden", "name": "example", "head": "topic"},
+                )
+                return response(graphql if graphql is not None else head_pulls(head_pull()))
+            if "/actions/workflows/" in url:
+                return response(
+                    {"id": 9, "path": self.config.caller_path, "state": "active"}
+                )
+            if "/contents/" in url:
+                return response({"type": "file", "sha": blob_sha})
+            if url.endswith("/jobs?per_page=100&page=1"):
+                return response({"jobs": []})
+            raise AssertionError(url)
+
+        return ProfileGitHub(self.config, "secret", FakeTransport(handler))
+
+    def test_pull_request_target_uses_default_base_proof_not_pr_head_caller_blob(self):
+        # The PR head may even carry a different caller file: it never ran.
+        client = self.client(blob_sha="d" * 40)
+        verified = client.verify_run(self.run_for(), SHA, require_success=True)
+        self.assertEqual((verified.event, verified.head_sha), ("pull_request_target", SHA))
+        self.assertEqual(verified.head_branch, "topic")
+        self.assertFalse(any("/contents/" in url for _, url, _ in self.calls))
+        self.assertTrue(any(url.endswith("/graphql") for _, url, _ in self.calls))
+
+    def test_pull_request_target_ignores_fork_prs_sharing_the_branch_name(self):
+        client = self.client(
+            head_pulls(head_pull(), head_pull(8, base="release", owner="fork/example"),
+                       head_pull(9, owner=None))
+        )
+        self.assertEqual(client.verify_target_base("topic"), (7,))
+
+    def test_pull_request_target_rejects_retargeted_or_non_default_bases(self):
+        for graphql in (
+            head_pulls(head_pull(base="release")),
+            head_pulls(head_pull(changes=1)),
+            head_pulls(head_pull(), head_pull(8, base="release")),
+            head_pulls(head_pull(owner="fork/example")),
+            head_pulls(),
+            head_pulls(head_pull(), total=2),
+            head_pulls(*[head_pull(n) for n in range(1, 102)]),
+            {"errors": [{"message": "denied"}], "data": None},
+            {"data": {"repository": None}},
+            head_pulls({"number": True, "baseRefName": "main",
+                        "headRepository": {"nameWithOwner": "RetireGolden/example"},
+                        "timelineItems": {"totalCount": 0}}),
+            head_pulls({**head_pull(), "timelineItems": None}),
+        ):
+            with self.subTest(graphql=graphql):
+                with self.assertRaises(ProfileGitHubError):
+                    self.client(graphql).verify_run(self.run_for(), SHA)
+
+    def test_pull_request_target_rejects_fork_heads_pin_and_invalid_branches(self):
+        for changed in (
+            {"head_repository": {"full_name": "fork/example"}},
+            {"referenced_workflows": []},
+            {"head_branch": None},
+            {"head_branch": ""},
+            {"head_branch": "bad branch"},
+            {"head_branch": "line\nbreak"},
+        ):
+            with self.subTest(changed=changed):
+                with self.assertRaises(ProfileGitHubError):
+                    self.client().verify_run(self.run_for(**changed), SHA)
+
+    def test_repository_dispatch_requires_default_branch_and_exact_caller_blob(self):
+        dispatch = self.run_for(event="repository_dispatch", head_branch="main", head_sha="c" * 40)
+        verified = self.client().verify_run(dispatch, SHA)
+        self.assertEqual(verified.event, "repository_dispatch")
+        self.assertFalse(any(url.endswith("/graphql") for _, url, _ in self.calls))
+        for changed in ({"head_branch": "topic"}, {"head_branch": None}):
+            with self.subTest(changed=changed):
+                with self.assertRaises(ProfileGitHubError):
+                    self.client().verify_run({**dispatch, **changed}, SHA)
+        with self.assertRaises(ProfileGitHubError):
+            self.client(blob_sha="d" * 40).verify_run(dispatch, SHA)
+
+    def test_untrusted_events_remain_rejected(self):
+        for event in ("push", "workflow_run", "pull_request_review", "issue_comment", None):
+            with self.subTest(event=event):
+                with self.assertRaises(ProfileGitHubError):
+                    self.client().verify_run(self.run_for(event=event), SHA)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

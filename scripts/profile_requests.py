@@ -22,6 +22,7 @@ from or_pr_review.profile_evidence import (
 from or_pr_review.review_context import restore_context
 
 from scripts.profile_github import (
+    PULL_REQUEST_EVENTS,
     ProfileGitHub,
     ProfileGitHubError,
     VerifiedRun,
@@ -713,7 +714,8 @@ class RequestHistory:
             raise ProfileRequestError(
                 "accepted request does not match the verified workflow run"
             )
-        if verified.event == "pull_request" and record.head_sha != verified.head_sha:
+        # Pull-request events run for the PR head; dispatches bind it via the live PR.
+        if verified.event in PULL_REQUEST_EVENTS and record.head_sha != verified.head_sha:
             raise ProfileRequestError(
                 "accepted request head SHA does not match the verified run"
             )

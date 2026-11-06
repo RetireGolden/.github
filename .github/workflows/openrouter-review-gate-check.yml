@@ -1,0 +1,124 @@
+# Head-bound gate check for trusted default-branch review callers.
+#
+# Default-branch runs (workflow_dispatch, repository_dispatch) attach their
+# native job checks to the default-branch tip, not to the reviewed PR head.
+# This workflow repeats openrouter-code-review.yml's first-pass gate result as a
+# check run (GitHub Actions app) on the exact head that gate evaluated, so a
+# required `review / openrouter-first-pass-gate` check is satisfied, or fails,
+# on that commit. Pull-request runs, including pull_request_target, already
+# report on the PR head, so `auto` mode leaves them to the native job check.
+#
+# It is a separate entry point because only this job needs `checks: write`.
+# GitHub validates every reusable-job permission against the caller before
+# runtime conditions, so adding the permission to the review workflow would
+# reject existing callers that do not grant it.
+#
+#   jobs:
+#     review:
+#       uses: RetireGolden/.github/.github/workflows/openrouter-code-review.yml@<sha>
+#       ...
+#     gate-check:
+#       needs: review
+#       if: always() && needs.review.outputs.gate_head_sha != ''
+#       uses: RetireGolden/.github/.github/workflows/openrouter-review-gate-check.yml@<sha>
+#       permissions:
+#         actions: read
+#         checks: write
+#         contents: read
+#         pull-requests: read
+#       with:
+#         pr_number: ${{ needs.review.outputs.gate_pr_number }}
+#         head_sha: ${{ needs.review.outputs.gate_head_sha }}
+#         conclusion: ${{ needs.review.outputs.gate_conclusion }}
+#         review_url: ${{ needs.review.outputs.gate_review_url }}
+#
+# It never checks out or executes pull-request content.
+name: OpenRouter review gate check
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: Pull request the first-pass gate evaluated
+        required: true
+        type: string
+      head_sha:
+        description: Exact PR head commit the first-pass gate evaluated
+        required: true
+        type: string
+      conclusion:
+        description: First-pass gate result; anything except success publishes failure
+        required: false
+        type: string
+        default: ''
+      review_url:
+        description: Optional review the gate accepted, linked from the check summary
+        required: false
+        type: string
+        default: ''
+      gate_check_name:
+        description: Check run name; match the required check on the target branch
+        required: false
+        type: string
+        default: 'review / openrouter-first-pass-gate'
+      publish_mode:
+        description: auto publishes only for default-branch runs; always also repeats pull-request results
+        required: false
+        type: string
+        default: 'auto'
+
+permissions:
+  actions: read
+  checks: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  publish:
+    name: Publish head-bound gate check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Resolve this reusable workflow's immutable source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --jq '[.referenced_workflows[] | select(.path | startswith("RetireGolden/.github/.github/workflows/openrouter-review-gate-check.yml@")) | .sha] | unique | if length == 1 then .[0] else error("ambiguous reusable workflow source") end')"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$source_sha" >> "$GITHUB_OUTPUT"
+      - name: Checkout the trusted gate check helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: RetireGolden/.github
+          ref: ${{ steps.source.outputs.sha }}
+          path: .trusted-review-org
+          persist-credentials: false
+      - name: Publish the gate result on the reviewed head
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          GATE_PR_NUMBER: ${{ inputs.pr_number }}
+          GATE_HEAD_SHA: ${{ inputs.head_sha }}
+          GATE_CONCLUSION: ${{ inputs.conclusion }}
+          GATE_REVIEW_URL: ${{ inputs.review_url }}
+          GATE_CHECK_NAME: ${{ inputs.gate_check_name }}
+          GATE_PUBLISH_MODE: ${{ inputs.publish_mode }}
+        with:
+          script: |
+            const { publishGateCheck } = await import(`${process.env.GITHUB_WORKSPACE}/.trusted-review-org/scripts/gate_check.mjs`)
+            await publishGateCheck(github, core, context, {
+              prNumber: process.env.GATE_PR_NUMBER,
+              headSha: process.env.GATE_HEAD_SHA,
+              conclusion: process.env.GATE_CONCLUSION,
+              reviewUrl: process.env.GATE_REVIEW_URL,
+              name: process.env.GATE_CHECK_NAME,
+              mode: process.env.GATE_PUBLISH_MODE,
+            })

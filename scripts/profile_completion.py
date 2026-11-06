@@ -31,6 +31,8 @@ from or_pr_review.review_plan import parse_review_profiles, resolve_review_plan
 from or_pr_review.review_policy import resolve_policy
 
 from scripts.profile_github import (
+    DEFAULT_BRANCH_EVENTS,
+    PULL_REQUEST_EVENTS,
     ProfileGitHub,
     ProfileGitHubError,
     VerifiedRun,
@@ -410,7 +412,9 @@ class ReceiptEvidence:
         verified = self._verify_source(run)
         self._require_successful_run(verified)
         self._reviewing_job(verified)
-        self._bind_source_heads(verified, marker_receipt.head_sha)
+        self._bind_source_heads(
+            verified, marker_receipt.head_sha, marker_receipt.pr_number
+        )
         receipt_bytes = self._client.artifact(
             verified,
             receipt_artifact_name(run_id, attempt),
@@ -546,13 +550,29 @@ class ReceiptEvidence:
             )
         return matches[0]
 
-    def _bind_source_heads(self, verified: VerifiedRun, receipt_head_sha: str) -> None:
-        if verified.event == "pull_request":
+    def _bind_source_heads(
+        self, verified: VerifiedRun, receipt_head_sha: str, pr_number: int
+    ) -> None:
+        if verified.event in PULL_REQUEST_EVENTS:
             if verified.head_sha != receipt_head_sha:
                 raise ProfileCompletionError(
                     "receipt head SHA does not match the verified pull request run"
                 )
-        elif verified.event == "workflow_dispatch":
+            if verified.event == "pull_request_target":
+                # The run names its triggering PR only by head branch and SHA.
+                pr = self._client.get_pr(pr_number)
+                head = pr.get("head")
+                head_repo = head.get("repo") if isinstance(head, Mapping) else None
+                if (
+                    not isinstance(head, Mapping)
+                    or head.get("ref") != verified.head_branch
+                    or not isinstance(head_repo, Mapping)
+                    or head_repo.get("full_name") != self.repository
+                ):
+                    raise ProfileCompletionError(
+                        "receipt pull request is not the verified run's head branch"
+                    )
+        elif verified.event in DEFAULT_BRANCH_EVENTS:
             if verified.head_branch != self._client.config.default_branch:
                 raise ProfileCompletionError(
                     "dispatch run is not on the default branch"
