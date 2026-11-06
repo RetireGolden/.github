@@ -29,7 +29,7 @@ from scripts.profile_completion import (
     context_artifact_name,
     receipt_artifact_name,
 )
-from scripts.profile_github import HTTPResponse, ProfileGitHub, TrustedWorkflow
+from scripts.profile_github import HTTPResponse, ProfileGitHub, TrustedWorkflow, VerifiedRun
 
 SHA = "a" * 40
 MAIN_SHA = "b" * 40
@@ -540,6 +540,103 @@ class ReceiptEvidenceTests(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].source.head_sha, SHA)
         self.assertEqual(items[0].receipt.head_sha, SHA)
+
+    def trusted_target_reader(self, store, *, head_ref="topic", base="main", changes=0):
+        """Reader whose GitHub fake also answers the pull_request_target proofs."""
+        inner = self.store_handler(store)
+        store["pr_reads"] = 0
+
+        def handler(method, url, headers, cap, data):
+            if url == "https://api.github.com/graphql":
+                return response(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequests": {
+                                    "totalCount": 1,
+                                    "nodes": [
+                                        {
+                                            "number": PR,
+                                            "baseRefName": base,
+                                            "headRepository": {"nameWithOwner": REPO},
+                                            "timelineItems": {"totalCount": changes},
+                                        }
+                                    ],
+                                }
+                            }
+                        }
+                    }
+                )
+            if url.endswith(f"/repos/{REPO}/pulls/{PR}"):
+                store["pr_reads"] += 1
+                return response(
+                    {"number": PR, "head": {"ref": head_ref, "sha": SHA, "repo": {"full_name": REPO}}}
+                )
+            return inner(method, url, headers, cap, data)
+
+        client = self.client(handler)
+        return ReceiptEvidence(
+            client,
+            lambda run: client.verify_run(run, SHA, require_success=True),
+            (JOB_INITIAL, JOB_VERIFY),
+            [REVIEW_STEP],
+        )
+
+    def test_collect_pull_request_target_binds_receipt_head_and_head_branch(self):
+        store = self.make_store()
+        bundle = bundle_for(head_sha=SHA)
+        self.install_bundle(store, bundle, event="pull_request_target", head_branch="topic")
+        items = self.trusted_target_reader(store).collect(PR, [self.review_record(bundle)])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].source.event, "pull_request_target")
+        self.assertEqual(items[0].receipt.head_sha, SHA)
+        self.assertEqual(store["pr_reads"], 1)
+
+    def test_collect_pull_request_target_rejects_stale_head_branch_and_base_changes(self):
+        cases = (
+            # The run reviewed an older head: an older receipt never satisfies a newer head.
+            ({"head_sha": MAIN_SHA}, {}),
+            # Receipt claims a PR that the run's head branch did not trigger.
+            ({}, {"head_ref": "other"}),
+            # The PR was ever retargeted, or targets a non-default branch.
+            ({}, {"changes": 1}),
+            ({}, {"base": "release"}),
+        )
+        for install, reader in cases:
+            with self.subTest(install=install, reader=reader):
+                store = self.make_store()
+                bundle = bundle_for(head_sha=SHA)
+                self.install_bundle(
+                    store, bundle, event="pull_request_target", head_branch="topic", **install
+                )
+                with self.assertRaises(ProfileCompletionError):
+                    self.trusted_target_reader(store, **reader).collect(
+                        PR, [self.review_record(bundle)]
+                    )
+
+    def test_collect_repository_dispatch_requires_default_branch_source(self):
+        store = self.make_store()
+        bundle = bundle_for(head_sha=SHA)
+        self.install_bundle(
+            store, bundle, head_sha=MAIN_SHA, event="repository_dispatch", head_branch="main"
+        )
+        items = self.reader(store).collect(PR, [self.review_record(bundle)])
+        self.assertEqual((items[0].source.event, items[0].source.head_sha), ("repository_dispatch", MAIN_SHA))
+        self.assertEqual(items[0].receipt.head_sha, SHA)
+        store = self.make_store()
+        self.install_bundle(
+            store, bundle, head_sha=MAIN_SHA, event="repository_dispatch", head_branch="topic"
+        )
+        with self.assertRaises(ProfileCompletionError):
+            self.reader(store).collect(PR, [self.review_record(bundle)])
+
+    def test_bind_source_heads_rejects_unknown_events_even_from_a_verifier(self):
+        reader = self.reader(self.make_store())
+        for event in ("push", "workflow_run"):
+            verified = VerifiedRun("RetireGolden", "example", RUN_ID, ATTEMPT, SHA, event, "main", 9, {}, ())
+            with self.subTest(event=event):
+                with self.assertRaises(ProfileCompletionError):
+                    reader._bind_source_heads(verified, SHA, PR)
 
     def test_collect_ignores_legacy_review_without_marker(self):
         store = self.make_store()

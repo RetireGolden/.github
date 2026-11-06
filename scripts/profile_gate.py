@@ -35,6 +35,8 @@ from scripts.profile_completion import (
     VerifiedReview,
 )
 from scripts.profile_github import (
+    DEFAULT_BRANCH_EVENTS,
+    PULL_REQUEST_EVENTS,
     ProfileGitHub,
     ProfileGitHubError,
     TrustedWorkflow,
@@ -189,6 +191,22 @@ def _file_at(source: Path, commit: str, path: str = CALLER_PATH) -> tuple[str, b
     return blob, content
 
 
+def _referenced_pin(run: Mapping[str, Any]) -> str:
+    """Return the run's single org review workflow pin as GitHub attested it."""
+    references = run.get("referenced_workflows") if isinstance(run, Mapping) else None
+    pins = {
+        match.group(1)
+        for item in (references if isinstance(references, list) else ())
+        if isinstance(item, Mapping)
+        and isinstance(item.get("path"), str)
+        and (match := PIN.fullmatch(item["path"])) is not None
+        and item.get("sha") == match.group(1)
+    }
+    if len(pins) != 1:
+        raise ProfileGitHubError("run lacks exactly one org review workflow pin")
+    return pins.pop()
+
+
 def _caller_pin(content: bytes) -> str:
     try:
         text = content.decode("utf-8", "strict")
@@ -200,6 +218,13 @@ def _caller_pin(content: bytes) -> str:
             "trusted caller must contain exactly one immutable reusable workflow pin"
         )
     return pins[0]
+
+
+def _caller_pin_or_none(content: bytes) -> Optional[str]:
+    try:
+        return _caller_pin(content)
+    except GateError:
+        return None
 
 
 def _repository_parts() -> tuple[str, str]:
@@ -292,6 +317,17 @@ def _historical_verifier(
         head = run.get("head_sha") if isinstance(run, Mapping) else None
         if not isinstance(head, str) or not SHA.fullmatch(head):
             raise ProfileGitHubError("workflow run lacks a full commit SHA")
+        if run.get("event") == "pull_request_target":
+            # Its caller came from the default branch (verify_run proves the base),
+            # so the reusable pin must be one that trusted default history used.
+            pin = _referenced_pin(run)
+            for blob, content in candidates.items():
+                if _caller_pin_or_none(content) == pin:
+                    historical = _configured_client(client, default_branch, pin)
+                    return historical.verify_run(run, blob, require_success=False)
+            raise ProfileGitHubError(
+                "run reusable pin is not reachable from trusted default history"
+            )
         actual_blob = client._content_blob(head)
         content = candidates.get(actual_blob)
         if content is None:
@@ -691,13 +727,13 @@ def begin() -> None:
         bare, current_blob, pin_matches_main=pin_matches_main
     )
     event = _env("GITHUB_EVENT_NAME")
+    default_ref = f"refs/heads/{bare.config.default_branch}"
+    if event == "pull_request_target" and _env("GITHUB_REF") != default_ref:
+        raise GateError("pull_request_target reviews require a default-branch base")
     if level in {"deep", "cancel"}:
-        if (
-            event != "workflow_dispatch"
-            or _env("GITHUB_REF") != f"refs/heads/{bare.config.default_branch}"
-        ):
+        if event not in DEFAULT_BRANCH_EVENTS or _env("GITHUB_REF") != default_ref:
             raise GateError(
-                "explicit deep and cancel require default-branch workflow_dispatch"
+                "explicit deep and cancel require a default-branch dispatch"
             )
         actor = os.environ.get("GITHUB_TRIGGERING_ACTOR", "") or _env("GITHUB_ACTOR")
         if not bare.maintainer(actor):
@@ -962,7 +998,7 @@ def _active_matching_run(
         if not isinstance(run, Mapping) or run.get("status") == "completed":
             continue
         if not _run_plausible_pr(run, number) and not (
-            run.get("event") == "pull_request" and run.get("head_sha") == head
+            run.get("event") in PULL_REQUEST_EVENTS and run.get("head_sha") == head
         ):
             continue
         try:
@@ -972,7 +1008,7 @@ def _active_matching_run(
             # work for the PR. Defer additional paid work until it finishes.
             return True
         if _run_plausible_pr(verified.run, number) or (
-            verified.event == "pull_request" and verified.head_sha == head
+            verified.event in PULL_REQUEST_EVENTS and verified.head_sha == head
         ):
             return True
     return False
@@ -1038,7 +1074,13 @@ def _is_current_receipt_source(
     client: ProfileGitHub, review: VerifiedReview, current_blob: str
 ) -> bool:
     """Keep historical proof separate from the stronger current-producer proof."""
-    if client._content_blob(review.source.head_sha) != current_blob:
+    if review.source.event == "pull_request_target":
+        # The executed caller is the default branch's; re-prove that base below.
+        try:
+            client.verify_target_base(review.source.head_branch)
+        except ProfileGitHubError:
+            return False
+    elif client._content_blob(review.source.head_sha) != current_blob:
         return False
     expected = f"{client.config.reusable_path}@{client.config.reusable_sha}"
     references = review.source.run.get("referenced_workflows")
@@ -1180,6 +1222,9 @@ def _source_pr(
     match = TITLE.fullmatch(title) if isinstance(title, str) else None
     if match:
         return int(match.group(1))
+    if verified.event == "repository_dispatch":
+        # Default-branch runs list PRs that merely share the default-branch head.
+        raise GateError("source dispatch run title does not identify a pull request")
     pulls = verified.run.get("pull_requests")
     if (
         not isinstance(pulls, list)

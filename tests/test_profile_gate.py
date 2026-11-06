@@ -1269,6 +1269,177 @@ class GateCommandTests(unittest.TestCase):
         self.assertEqual(bare.create_status.call_args_list[1].args[1], "success")
 
 
+class TrustedCallerEventGateTests(unittest.TestCase):
+    """pull_request_target and repository_dispatch in gate orchestration."""
+
+    CALLER = (
+        b"uses: RetireGolden/.github/.github/workflows/openrouter-code-review.yml@"
+        + PIN.encode()
+    )
+
+    def config(self):
+        return TrustedWorkflow("RetireGolden", "example", "main", reusable_sha=PIN)
+
+    def target_run(self, pin=PIN, **overrides):
+        run = {
+            "id": 5,
+            "run_attempt": 1,
+            "head_sha": SHA_A,
+            "head_branch": "topic",
+            "event": "pull_request_target",
+            "referenced_workflows": [
+                {
+                    "path": f"RetireGolden/.github/.github/workflows/openrouter-code-review.yml@{pin}",
+                    "sha": pin,
+                }
+            ],
+        }
+        run.update(overrides)
+        return run
+
+    def historical(self, client):
+        return (
+            patch.object(gate, "_source_workspace", return_value=gate.Path("fixture")),
+            patch.object(gate, "_git", side_effect=[(SHA_B + "\n").encode()]),
+            patch.object(gate, "_file_at", return_value=(SHA_B, self.CALLER)),
+        )
+
+    def test_historical_target_run_uses_its_attested_pin_not_the_pr_head_blob(self):
+        client = SimpleNamespace(config=self.config(), _content_blob=Mock(side_effect=AssertionError))
+        configured = Mock()
+        configured.verify_run.return_value = "verified"
+        source, git, file_at = self.historical(client)
+        with source, git, file_at, patch.object(gate, "_configured_client", return_value=configured) as made:
+            verify = gate._historical_verifier(client, "main", SHA_B)  # type: ignore[arg-type]
+            self.assertEqual(verify(self.target_run()), "verified")
+        made.assert_called_once_with(client, "main", PIN)
+        configured.verify_run.assert_called_once_with(self.target_run(), SHA_B, require_success=False)
+        client._content_blob.assert_not_called()
+
+    def test_historical_target_run_rejects_pins_outside_default_history(self):
+        client = SimpleNamespace(config=self.config(), _content_blob=Mock(side_effect=AssertionError))
+        for run in (
+            self.target_run(pin="9" * 40),
+            self.target_run(referenced_workflows=[]),
+            self.target_run(
+                referenced_workflows=[
+                    {"path": f"RetireGolden/.github/.github/workflows/openrouter-code-review.yml@{PIN}", "sha": "9" * 40}
+                ]
+            ),
+        ):
+            source, git, file_at = self.historical(client)
+            with self.subTest(run=run), source, git, file_at:
+                verify = gate._historical_verifier(client, "main", SHA_B)  # type: ignore[arg-type]
+                with self.assertRaises(ProfileGitHubError):
+                    verify(run)
+
+    def target_review(self, pin=PIN, event="pull_request_target"):
+        run = self.target_run(pin=pin, event=event)
+        source = VerifiedRun("RetireGolden", "example", 5, 1, SHA_A, event, "topic", 9, run, ())
+        return SimpleNamespace(source=source)
+
+    def test_current_target_receipt_requires_default_base_and_current_pin(self):
+        ok = Mock(return_value=(7,))
+        client = SimpleNamespace(config=self.config(), verify_target_base=ok, _content_blob=Mock(side_effect=AssertionError))
+        self.assertTrue(gate._is_current_receipt_source(client, self.target_review(), SHA_B))
+        ok.assert_called_once_with("topic")
+        self.assertFalse(gate._is_current_receipt_source(client, self.target_review(pin="9" * 40), SHA_B))
+        client.verify_target_base = Mock(side_effect=ProfileGitHubError("retargeted"))
+        self.assertFalse(gate._is_current_receipt_source(client, self.target_review(), SHA_B))
+        client._content_blob.assert_not_called()
+
+    def test_current_pull_request_receipt_still_requires_exact_caller_blob(self):
+        client = SimpleNamespace(config=self.config(), verify_target_base=Mock(side_effect=AssertionError),
+                                 _content_blob=Mock(return_value="9" * 40))
+        self.assertFalse(gate._is_current_receipt_source(client, self.target_review(event="pull_request"), SHA_B))
+        client._content_blob.return_value = SHA_B
+        self.assertTrue(gate._is_current_receipt_source(client, self.target_review(event="pull_request"), SHA_B))
+
+    def begin_env(self, temporary, **overrides):
+        env = {
+            "REVIEW_LEVEL": "auto",
+            "GITHUB_EVENT_NAME": "pull_request_target",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_ACTOR": "maintainer",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": SHA_A,
+            "GITHUB_RUN_ID": "101",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "ORG_WORKFLOW_SHA": PIN,
+            "REQUEST_STATE_FILE": str(Path(temporary) / "state.json"),
+            "GITHUB_REPOSITORY": REPO,
+        }
+        env.update(overrides)
+        return env
+
+    def run_begin(self, env, title="OpenRouter PR #7: auto", pr=None):
+        history = Mock()
+        history.load.return_value = ()
+        history.fold_history.return_value = None
+        bare = SimpleNamespace(config=self.config(), maintainer=lambda login: login == "maintainer")
+        captured = {}
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(gate, "_client", return_value=Mock()),
+            patch.object(gate, "_current_trust", return_value=(bare, SHA_B, SHA_A, b"")),
+            patch.object(gate, "_verify_begin_run", return_value=False),
+            patch.object(gate, "_current_run", return_value={"display_title": title}),
+            patch.object(gate, "_live_pr", return_value=pr or live_pr()),
+            patch.object(gate, "_history_and_evidence", return_value=(history, Mock(collect=Mock(return_value=())), Mock())),
+            patch.object(gate, "_output", side_effect=captured.update),
+        ):
+            gate.begin()
+        return captured
+
+    def test_begin_admits_default_base_pull_request_target_and_binds_live_head(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            captured = self.run_begin(self.begin_env(temporary))
+        self.assertEqual((captured["request_kind"], captured["head_sha"]), ("none", SHA_A))
+        for overrides, message in (
+            ({"GITHUB_REF": "refs/heads/release"}, "default-branch base"),
+            ({"HEAD_SHA": "9" * 40}, "does not match the live pull request"),
+            ({"PR_NUMBER": "8"}, "title does not match"),
+            ({"REVIEW_LEVEL": "deep"}, "default-branch dispatch"),
+        ):
+            with self.subTest(overrides=overrides), tempfile.TemporaryDirectory() as temporary:
+                with self.assertRaisesRegex(gate.GateError, message):
+                    self.run_begin(self.begin_env(temporary, **overrides), title="OpenRouter PR #7: " + overrides.get("REVIEW_LEVEL", "auto"))
+
+    def test_begin_allows_maintainer_deep_only_from_default_branch_repository_dispatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            env = self.begin_env(temporary, GITHUB_EVENT_NAME="repository_dispatch", REVIEW_LEVEL="deep")
+            captured = self.run_begin(env, title="OpenRouter PR #7: deep")
+        self.assertEqual(captured["request_kind"], "deep")
+        for overrides, message in (
+            ({"GITHUB_REF": "refs/heads/topic"}, "default-branch dispatch"),
+            ({"GITHUB_ACTOR": "contributor"}, "require a maintainer"),
+        ):
+            with self.subTest(overrides=overrides), tempfile.TemporaryDirectory() as temporary:
+                env = self.begin_env(temporary, GITHUB_EVENT_NAME="repository_dispatch", REVIEW_LEVEL="deep", **overrides)
+                with self.assertRaisesRegex(gate.GateError, message):
+                    self.run_begin(env, title="OpenRouter PR #7: deep")
+
+    def test_source_pr_for_repository_dispatch_requires_its_title(self):
+        def verified(title, pulls):
+            return VerifiedRun("RetireGolden", "example", 99, 1, SHA_B, "repository_dispatch", "main", 9,
+                               {"display_title": title, "pull_requests": pulls}, ())
+
+        client = SimpleNamespace(config=self.config(), _api=Mock(return_value={"id": 99}))
+        with patch.dict(os.environ, {"SOURCE_RUN_ID": "99"}, clear=True):
+            self.assertEqual(gate._source_pr(client, lambda run: verified("OpenRouter PR #7: auto", [])), 7)
+            # PRs whose head happens to equal the default branch are not the dispatched PR.
+            with self.assertRaisesRegex(gate.GateError, "title"):
+                gate._source_pr(client, lambda run: verified("recover", [{"number": 3}]))
+
+    def test_active_target_run_for_the_head_defers_additional_spend(self):
+        run = {"id": 5, "run_attempt": 1, "status": "in_progress", "event": "pull_request_target",
+               "head_sha": SHA_A, "display_title": "unrelated", "pull_requests": []}
+        verified = VerifiedRun("RetireGolden", "example", 5, 1, SHA_A, "pull_request_target", "topic", 9, run, ())
+        client = SimpleNamespace(config=self.config(), paginated=_active_run_pages({"in_progress": [run]}))
+        self.assertTrue(gate._active_matching_run(client, lambda value: verified, 7, SHA_A))
+        self.assertFalse(gate._active_matching_run(client, lambda value: verified, 7, SHA_B))
+
+
 def verified_run():
     return VerifiedRun(
         "RetireGolden", "example", 1, 1, SHA_A, "workflow_dispatch", "main", 9, {}, ()

@@ -226,6 +226,18 @@ function buildStore(options = {}) {
   };
 
   const github = {
+    graphql: async (query, variables) => {
+      store.graphqlCalls = [...(store.graphqlCalls ?? []), { query, variables }];
+      const nodes = options.targetPulls ?? [
+        {
+          number: PULL_NUMBER,
+          baseRefName: DEFAULT_BRANCH,
+          headRepository: { nameWithOwner: REPOSITORY.full_name },
+          timelineItems: { totalCount: 0 },
+        },
+      ];
+      return { repository: { pullRequests: { totalCount: options.targetTotal ?? nodes.length, nodes } } };
+    },
     request: async (route, params = {}) => {
       if (route === 'GET /repos/{owner}/{repo}') {
         return { data: { default_branch: DEFAULT_BRANCH } };
@@ -254,7 +266,7 @@ function buildStore(options = {}) {
             state: 'open',
             draft: false,
             created_at: options.createdAt ?? PR_CREATED_AT,
-            head: { sha: store.headSha, repo: REPOSITORY },
+            head: { sha: store.headSha, ref: options.headRef ?? 'topic', repo: REPOSITORY },
             base: { sha: resolvedBaseSha, ref: DEFAULT_BRANCH, repo: REPOSITORY },
           },
         };
@@ -657,6 +669,134 @@ describe('authorizeProfileReceipt', () => {
     });
     const result = await authorizeProfileReceipt(github, authorizeContext(store));
     assert.equal(result.authorized, true);
+  });
+});
+
+describe('authorizeProfileReceipt trusted caller events', () => {
+  const target = { event: 'pull_request_target', head_branch: 'topic' };
+  const targetPull = (overrides = {}) => ({
+    number: PULL_NUMBER,
+    baseRefName: DEFAULT_BRANCH,
+    headRepository: { nameWithOwner: REPOSITORY.full_name },
+    timelineItems: { totalCount: 0 },
+    ...overrides,
+  });
+
+  it('authorizes a pull_request_target review from a default-base head branch', async () => {
+    // The PR head's own caller file never ran, so its blob is irrelevant.
+    const { github, store } = buildStore({
+      reviewRunOverrides: target,
+      reviewRuns: [reviewRun(target)],
+      headCallerSha: '5'.repeat(40),
+    });
+    const result = await authorizeProfileReceipt(github, authorizeContext(store));
+    assert.equal(result.authorized, true, result.reason);
+    assert.equal(store.graphqlCalls.length, 1);
+    assert.deepEqual(store.graphqlCalls[0].variables, { owner: OWNER, name: REPO, head: 'topic' });
+    assert.match(store.graphqlCalls[0].query, /BASE_REF_CHANGED_EVENT/);
+    assert.match(store.graphqlCalls[0].query, /AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT/);
+  });
+
+  it('ignores fork PRs that share the head branch name', async () => {
+    const { github, store } = buildStore({
+      reviewRunOverrides: target,
+      reviewRuns: [reviewRun(target)],
+      targetPulls: [
+        targetPull(),
+        targetPull({ number: 8, baseRefName: 'release', headRepository: { nameWithOwner: 'fork/example' } }),
+        targetPull({ number: 9, headRepository: null }),
+      ],
+    });
+    const result = await authorizeProfileReceipt(github, authorizeContext(store));
+    assert.equal(result.authorized, true, result.reason);
+  });
+
+  it('rejects retargeted, non-default, unbounded or missing head-branch PRs', async () => {
+    for (const options of [
+      { targetPulls: [targetPull({ timelineItems: { totalCount: 1 } })] },
+      { targetPulls: [targetPull({ baseRefName: 'release' })] },
+      { targetPulls: [targetPull(), targetPull({ number: 8, baseRefName: 'release' })] },
+      { targetPulls: [] },
+      { targetPulls: [targetPull()], targetTotal: 2 },
+      { targetPulls: [targetPull({ timelineItems: null })] },
+    ]) {
+      const { github, store } = buildStore({ reviewRunOverrides: target, reviewRuns: [reviewRun(target)], ...options });
+      const result = await authorizeProfileReceipt(github, authorizeContext(store));
+      assert.equal(result.authorized, false);
+      assert.match(result.reason, /head branch|default-branch pull request/i);
+    }
+  });
+
+  it('rejects stale pull-request heads and a mismatched head branch', async () => {
+    for (const event of ['pull_request', 'pull_request_target']) {
+      const overrides = { event, head_branch: 'topic', head_sha: 'e'.repeat(40) };
+      const { github, store } = buildStore({ reviewRunOverrides: overrides, reviewRuns: [reviewRun(overrides)] });
+      const result = await authorizeProfileReceipt(github, authorizeContext(store));
+      assert.equal(result.authorized, false);
+      assert.match(result.reason, /head SHA does not match the receipt head/);
+    }
+    const { github, store } = buildStore({ reviewRunOverrides: target, reviewRuns: [reviewRun(target)], headRef: 'other' });
+    const result = await authorizeProfileReceipt(github, authorizeContext(store));
+    assert.equal(result.authorized, false);
+    assert.match(result.reason, /head branch does not match/);
+  });
+
+  it('rejects pull_request_target runs from fork heads or without the trusted pin', async () => {
+    for (const overrides of [
+      { ...target, head_repository: { full_name: 'fork/example' } },
+      { ...target, referenced_workflows: [] },
+      { ...target, head_branch: 'bad branch' },
+    ]) {
+      const { github, store } = buildStore({ reviewRunOverrides: overrides, reviewRuns: [reviewRun(overrides)] });
+      const result = await authorizeProfileReceipt(github, authorizeContext(store));
+      assert.equal(result.authorized, false);
+    }
+  });
+
+  it('authorizes repository_dispatch only from the default branch caller', async () => {
+    const dispatch = { event: 'repository_dispatch', head_branch: DEFAULT_BRANCH, head_sha: MAIN_SHA, display_title: `OpenRouter PR #${PULL_NUMBER}: deep` };
+    let built = buildStore({ reviewRunOverrides: dispatch, reviewRuns: [reviewRun(dispatch)] });
+    let result = await authorizeProfileReceipt(built.github, authorizeContext(built.store));
+    assert.equal(result.authorized, true, result.reason);
+    assert.equal(built.store.graphqlCalls, undefined);
+    built = buildStore({ reviewRunOverrides: { ...dispatch, head_branch: 'topic' } });
+    result = await authorizeProfileReceipt(built.github, authorizeContext(built.store));
+    assert.equal(result.authorized, false);
+    assert.match(result.reason, /default branch/);
+    built = buildStore({ reviewRunOverrides: { ...dispatch, head_sha: '6'.repeat(40) }, headCallerSha: '5'.repeat(40) });
+    result = await authorizeProfileReceipt(built.github, authorizeContext(built.store));
+    assert.equal(result.authorized, false);
+    assert.match(result.reason, /caller blob/);
+  });
+
+  it('blocks on an active repository_dispatch review titled for this PR', async () => {
+    const dispatch = { event: 'repository_dispatch', head_branch: DEFAULT_BRANCH, head_sha: MAIN_SHA };
+    const { github, store } = buildStore({
+      reviewRuns: [
+        reviewRun(),
+        reviewRun({ ...dispatch, id: 101, status: 'in_progress', conclusion: null, display_title: `OpenRouter PR #${PULL_NUMBER}: auto` }),
+      ],
+    });
+    const result = await authorizeProfileReceipt(github, authorizeContext(store));
+    assert.equal(result.authorized, false);
+    assert.match(result.reason, /still active/);
+    // Default-branch runs list PRs that merely share the default head; titles decide.
+    const other = buildStore({
+      reviewRuns: [
+        reviewRun(),
+        reviewRun({ ...dispatch, id: 102, status: 'in_progress', conclusion: null, display_title: 'OpenRouter PR #99: auto', pull_requests: [{ number: PULL_NUMBER }] }),
+      ],
+    });
+    assert.equal((await authorizeProfileReceipt(other.github, authorizeContext(other.store))).authorized, true);
+  });
+
+  it('keeps rejecting untrusted review events', async () => {
+    for (const event of ['push', 'workflow_run', 'pull_request_review']) {
+      const { github, store } = buildStore({ reviewRunOverrides: { event } });
+      const result = await authorizeProfileReceipt(github, authorizeContext(store));
+      assert.equal(result.authorized, false);
+      assert.match(result.reason, /event is not trusted/);
+    }
   });
 });
 

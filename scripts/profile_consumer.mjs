@@ -59,7 +59,18 @@ const REVIEW_PIN_RE =
 const DISPATCH_TITLE_RE = /^OpenRouter PR #([1-9][0-9]*): (auto|deep|cancel)$/;
 const PROOF_JOB_RE = /^complete \/ profile #([1-9][0-9]*) ([0-9a-f]{64})$/;
 const COMPLETION_EVENTS = new Set(['workflow_run', 'push', 'workflow_dispatch']);
-const REVIEW_EVENTS = new Set(['pull_request', 'workflow_dispatch']);
+const PULL_REQUEST_EVENTS = new Set(['pull_request', 'pull_request_target']);
+const DEFAULT_BRANCH_EVENTS = new Set(['workflow_dispatch', 'repository_dispatch']);
+const REVIEW_EVENTS = new Set([...PULL_REQUEST_EVENTS, ...DEFAULT_BRANCH_EVENTS]);
+export const MAX_HEAD_PULL_REQUESTS = 100;
+// Keep in step with scripts/profile_github.py.
+const HEAD_PULLS_QUERY =
+  'query($owner: String!, $name: String!, $head: String!) {' +
+  ' repository(owner: $owner, name: $name) {' +
+  ` pullRequests(headRefName: $head, first: ${MAX_HEAD_PULL_REQUESTS}, states: [OPEN, CLOSED, MERGED]) {` +
+  ' totalCount nodes { number baseRefName headRepository { nameWithOwner }' +
+  ' timelineItems(itemTypes: [BASE_REF_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT], first: 1) { totalCount } } } } }';
+const BRANCH_RE = /^[^\x00-\x1f\x7f ~^:?*\[\\]{1,255}$/;
 
 function unauthorized(reason) {
   return { authorized: false, reason };
@@ -197,6 +208,50 @@ async function activeWorkflow(github, owner, repo, path) {
   return data.id;
 }
 
+// pull_request_target runs report the PR head, but GitHub executes the caller
+// from the PR's base branch at event time. Require every same-repository PR from
+// that head branch to target the default branch with no recorded base change.
+export async function verifyTargetBase(github, { owner, repo, repository, defaultBranch }, headBranch) {
+  if (typeof headBranch !== 'string' || !BRANCH_RE.test(headBranch)) {
+    throw new Error('pull_request_target run has an invalid head branch');
+  }
+  if (typeof github?.graphql !== 'function') {
+    throw new Error('GraphQL client is unavailable for pull_request_target provenance');
+  }
+  const data = await github.graphql(HEAD_PULLS_QUERY, { owner, name: repo, head: headBranch });
+  const pulls = data?.repository?.pullRequests;
+  const nodes = pulls?.nodes;
+  if (
+    !Array.isArray(nodes) ||
+    !Number.isInteger(pulls?.totalCount) ||
+    pulls.totalCount !== nodes.length ||
+    pulls.totalCount > MAX_HEAD_PULL_REQUESTS
+  ) {
+    throw new Error('head branch pull requests are unavailable or unbounded');
+  }
+  const numbers = [];
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object') {
+      throw new Error('head branch pull request entry is invalid');
+    }
+    if (node.headRepository?.nameWithOwner !== repository.full_name) {
+      continue;
+    }
+    const changed = node.timelineItems?.totalCount;
+    if (!Number.isInteger(node.number) || node.number <= 0 || !Number.isInteger(changed)) {
+      throw new Error('head branch pull request entry is invalid');
+    }
+    if (node.baseRefName !== defaultBranch || changed !== 0) {
+      throw new Error('pull_request_target head branch has a non-default or changed base');
+    }
+    numbers.push(node.number);
+  }
+  if (numbers.length === 0) {
+    throw new Error('pull_request_target run has no default-branch pull request');
+  }
+  return numbers.sort((left, right) => left - right);
+}
+
 async function verifyReviewRunProvenance(
   github,
   { owner, repo, repository, defaultBranch, reviewPin, trustedCallerSha },
@@ -211,7 +266,7 @@ async function verifyReviewRunProvenance(
   if (!REVIEW_EVENTS.has(run.event)) {
     throw new Error('review run event is not trusted');
   }
-  if (run.event === 'workflow_dispatch' && run.head_branch !== defaultBranch) {
+  if (DEFAULT_BRANCH_EVENTS.has(run.event) && run.head_branch !== defaultBranch) {
     throw new Error('dispatch review run is not on the default branch');
   }
   const workflowId = await activeWorkflow(github, owner, repo, REVIEW_CALLER_PATH);
@@ -221,6 +276,10 @@ async function verifyReviewRunProvenance(
   const expectedReusable = `${ORG_REVIEW_REUSABLE_PREFIX}${reviewPin}`;
   if (!reusablePinned(run, expectedReusable, reviewPin)) {
     throw new Error('review run lacks the exact trusted reusable workflow pin');
+  }
+  if (run.event === 'pull_request_target') {
+    await verifyTargetBase(github, { owner, repo, repository, defaultBranch }, run.head_branch);
+    return;
   }
   const headBlob = await readCallerBlob(github, owner, repo, run.head_sha);
   if (headBlob.sha !== trustedCallerSha) {
@@ -546,7 +605,7 @@ function proofJobFor(jobs, pullNumber, receiptDigest) {
 }
 
 function runMatchesPull(run, pullNumber, headSha) {
-  if (run.event === 'workflow_dispatch') {
+  if (DEFAULT_BRANCH_EVENTS.has(run.event)) {
     const titleMatch =
       typeof run.display_title === 'string' ? DISPATCH_TITLE_RE.exec(run.display_title) : null;
     return Boolean(titleMatch && Number(titleMatch[1]) === pullNumber);
@@ -687,6 +746,15 @@ export async function authorizeProfileReceipt(
     await verifyReviewRunProvenance(github, provenanceContext, reviewRun);
     if (reviewRun.status !== 'completed' || reviewRun.conclusion !== 'success') {
       return unauthorized('review run is not successful');
+    }
+    if (PULL_REQUEST_EVENTS.has(reviewRun.event)) {
+      // A pull-request run reviews its own head; an older head never satisfies a newer one.
+      if (reviewRun.head_sha !== expectedHead) {
+        return unauthorized('review run head SHA does not match the receipt head');
+      }
+      if (reviewRun.event === 'pull_request_target' && livePr.pr.head?.ref !== reviewRun.head_branch) {
+        return unauthorized('review run head branch does not match the pull request');
+      }
     }
     if (receipt.run_url !== reviewRunUrl || receipt.run_attempt !== reviewRunAttempt) {
       return unauthorized('receipt does not bind to the supplied review run');

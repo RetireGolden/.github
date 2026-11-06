@@ -26,6 +26,23 @@ MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_BRANCH = re.compile(r"^[^\x00-\x1f\x7f ~^:?*\[\\]{1,255}$")
+
+# Review caller events.  Pull-request events run for the PR head; dispatches run
+# from the default branch and name the PR through workflow inputs.
+PULL_REQUEST_EVENTS = frozenset({"pull_request", "pull_request_target"})
+DEFAULT_BRANCH_EVENTS = frozenset({"workflow_dispatch", "repository_dispatch"})
+REVIEW_EVENTS = PULL_REQUEST_EVENTS | DEFAULT_BRANCH_EVENTS
+MAX_HEAD_PULL_REQUESTS = 100
+# A base change means earlier pull_request_target runs used another branch's caller.
+_BASE_CHANGE_ITEMS = "BASE_REF_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT"
+_HEAD_PULLS_QUERY = (
+    "query($owner: String!, $name: String!, $head: String!) {"
+    " repository(owner: $owner, name: $name) {"
+    " pullRequests(headRefName: $head, first: %d, states: [OPEN, CLOSED, MERGED]) {"
+    " totalCount nodes { number baseRefName headRepository { nameWithOwner }"
+    " timelineItems(itemTypes: [%s], first: 1) { totalCount } } } } }"
+) % (MAX_HEAD_PULL_REQUESTS, _BASE_CHANGE_ITEMS)
 
 
 class ProfileGitHubError(RuntimeError):
@@ -417,18 +434,18 @@ class ProfileGitHub:
         event = run.get("event")
         if not isinstance(path, str) or path != self.config.caller_path:
             raise ProfileGitHubError("workflow run has an untrusted caller or event")
-        if not isinstance(event, str) or event not in {
-            "pull_request",
-            "workflow_dispatch",
-        }:
+        if not isinstance(event, str) or event not in REVIEW_EVENTS:
             raise ProfileGitHubError("workflow run has an untrusted caller or event")
         head_branch = run.get("head_branch")
-        if event == "workflow_dispatch":
+        if event in DEFAULT_BRANCH_EVENTS:
             if (
                 not isinstance(head_branch, str)
                 or head_branch != self.config.default_branch
             ):
                 raise ProfileGitHubError("dispatch run is not on the default branch")
+        elif event == "pull_request_target":
+            if not isinstance(head_branch, str) or not _BRANCH.fullmatch(head_branch):
+                raise ProfileGitHubError("workflow run has an invalid head branch")
         elif head_branch is not None and not isinstance(head_branch, str):
             raise ProfileGitHubError("workflow run has an invalid head branch")
         status = run.get("status")
@@ -472,7 +489,12 @@ class ProfileGitHub:
             raise ProfileGitHubError(
                 "run lacks the exact trusted reusable workflow pin"
             )
-        if self._content_blob(head_sha) != trusted_blob:
+        if event == "pull_request_target":
+            # GitHub reports the PR head for these runs, but executes the caller
+            # from the PR's base branch.  Prove that base was always the default
+            # branch; the exact reusable pin was checked above.
+            self.verify_target_base(head_branch)
+        elif self._content_blob(head_sha) != trusted_blob:
             raise ProfileGitHubError(
                 "exact-head caller blob differs from trusted default caller"
             )
@@ -494,6 +516,75 @@ class ProfileGitHub:
             dict(run),
             tuple(jobs),
         )
+
+    def _graphql(self, query: str, variables: Mapping[str, str]) -> Mapping[str, Any]:
+        value = self._api(
+            "/graphql",
+            method="POST",
+            payload={"query": query, "variables": dict(variables)},
+        )
+        if (
+            not isinstance(value, Mapping)
+            or value.get("errors")
+            or not isinstance(value.get("data"), Mapping)
+        ):
+            raise ProfileGitHubError("GitHub GraphQL response is invalid")
+        return value["data"]
+
+    def verify_target_base(self, head_branch: str) -> tuple[int, ...]:
+        """Prove pull_request_target runs from ``head_branch`` used the default caller.
+
+        GitHub runs pull_request_target with the workflow file from the PR's base
+        branch at event time.  The run API exposes only the PR head, so require
+        every same-repository PR from this head branch to target the default branch
+        without any recorded base change.  A PR that was ever retargeted (or one
+        from the same branch into another base) fails closed; open a fresh branch.
+        """
+        if not isinstance(head_branch, str) or not _BRANCH.fullmatch(head_branch):
+            raise ProfileGitHubError("pull_request_target run has an invalid head branch")
+        data = self._graphql(
+            _HEAD_PULLS_QUERY,
+            {"owner": self.config.owner, "name": self.config.name, "head": head_branch},
+        )
+        repository = data.get("repository")
+        pulls = repository.get("pullRequests") if isinstance(repository, Mapping) else None
+        nodes = pulls.get("nodes") if isinstance(pulls, Mapping) else None
+        total = pulls.get("totalCount") if isinstance(pulls, Mapping) else None
+        if (
+            not isinstance(nodes, list)
+            or not isinstance(total, int)
+            or isinstance(total, bool)
+            or total != len(nodes)
+            or total > MAX_HEAD_PULL_REQUESTS
+        ):
+            raise ProfileGitHubError("head branch pull requests are unavailable or unbounded")
+        numbers: list[int] = []
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                raise ProfileGitHubError("head branch pull request entry is invalid")
+            head_repo = node.get("headRepository")
+            owner = head_repo.get("nameWithOwner") if isinstance(head_repo, Mapping) else None
+            if owner != self.config.full_name:
+                continue  # Fork runs are rejected by head_repository; forks cannot retarget ours.
+            number = node.get("number")
+            changes = node.get("timelineItems")
+            changed = changes.get("totalCount") if isinstance(changes, Mapping) else None
+            if (
+                not isinstance(number, int)
+                or isinstance(number, bool)
+                or number <= 0
+                or not isinstance(changed, int)
+                or isinstance(changed, bool)
+            ):
+                raise ProfileGitHubError("head branch pull request entry is invalid")
+            if node.get("baseRefName") != self.config.default_branch or changed != 0:
+                raise ProfileGitHubError(
+                    "pull_request_target head branch has a non-default or changed base"
+                )
+            numbers.append(number)
+        if not numbers:
+            raise ProfileGitHubError("pull_request_target run has no default-branch pull request")
+        return tuple(sorted(numbers))
 
     @staticmethod
     def _safe_artifact_url(location: str) -> str:

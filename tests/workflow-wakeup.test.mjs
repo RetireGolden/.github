@@ -53,3 +53,16 @@ test('wrong workflow path and disabled workflows fail closed', async () => {
     assert.deepEqual(f.calls, []);
   }
 });
+test('bot-sent repository_dispatch reviews also wake the default-branch validator', async () => {
+  const f = fixture({ eventName: 'repository_dispatch' });
+  await dispatchWorkflowWake(f.github, f.core, f.context, 'openrouter-profile-completion.yml');
+  assert.deepEqual(f.calls, [{ owner: 'RetireGolden', repo: 'example', workflow_id: 'openrouter-profile-completion.yml', ref: 'main', inputs: { source_run_id: '42' } }]);
+  for (const overrides of [{ eventName: 'repository_dispatch', actor: 'maintainer' }, { eventName: 'pull_request_target' }]) {
+    const other = fixture(overrides);
+    await dispatchWorkflowWake(other.github, other.core, other.context, 'openrouter-profile-completion.yml');
+    assert.deepEqual(other.calls, []);
+  }
+  const offDefault = fixture({ eventName: 'repository_dispatch', ref: 'refs/heads/topic' });
+  await assert.rejects(dispatchWorkflowWake(offDefault.github, offDefault.core, offDefault.context, 'openrouter-profile-completion.yml'));
+  assert.deepEqual(offDefault.calls, []);
+});

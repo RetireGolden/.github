@@ -4,7 +4,9 @@
 export async function dispatchWorkflowWake(github, core, context, target, optional = false) {
   const allowed = new Set(['openrouter-profile-completion.yml', 'openrouter-ci-broker.yml']);
   if (!allowed.has(target)) throw new Error('unsupported completion wake target');
-  if (context.eventName !== 'workflow_dispatch' || context.actor !== 'github-actions[bot]') {
+  // Bot-sent workflow_dispatch and repository_dispatch runs suppress workflow_run.
+  const dispatched = context.eventName === 'workflow_dispatch' || context.eventName === 'repository_dispatch';
+  if (!dispatched || context.actor !== 'github-actions[bot]') {
     return core.info('Native completion events cover this run');
   }
   if (!Number.isSafeInteger(context.runId) || context.runId <= 0) {
