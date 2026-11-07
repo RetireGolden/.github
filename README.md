@@ -259,6 +259,10 @@ that head branch to target the default branch with no recorded base change,
 the exact trusted reusable pin, a run head equal to the receipt head, and a PR
 whose head branch matches the run. A receipt for an older head never satisfies
 a newer one. If a PR was retargeted, push the change on a fresh branch.
+Base-history proof uses the filtered timeline nodes and requires a complete
+connection with no base-change events. GitHub's timeline `totalCount` can include
+unrelated events despite the `itemTypes` filter, so it cannot prove that a base
+changed. Missing, malformed, or incomplete filtered results fail closed.
 
 ### Thin completion caller (example)
 
