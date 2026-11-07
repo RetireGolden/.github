@@ -559,7 +559,10 @@ class ReceiptEvidenceTests(unittest.TestCase):
                                             "number": PR,
                                             "baseRefName": base,
                                             "headRepository": {"nameWithOwner": REPO},
-                                            "timelineItems": {"totalCount": changes},
+                                            "timelineItems": {
+                                                "nodes": [{"__typename": "BaseRefChangedEvent"}] if changes else [],
+                                                "pageInfo": {"hasNextPage": False},
+                                            },
                                         }
                                     ],
                                 }

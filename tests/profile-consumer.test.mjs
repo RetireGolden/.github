@@ -233,7 +233,7 @@ function buildStore(options = {}) {
           number: PULL_NUMBER,
           baseRefName: DEFAULT_BRANCH,
           headRepository: { nameWithOwner: REPOSITORY.full_name },
-          timelineItems: { totalCount: 0 },
+          timelineItems: { nodes: [], pageInfo: { hasNextPage: false } },
         },
       ];
       return { repository: { pullRequests: { totalCount: options.targetTotal ?? nodes.length, nodes } } };
@@ -678,7 +678,7 @@ describe('authorizeProfileReceipt trusted caller events', () => {
     number: PULL_NUMBER,
     baseRefName: DEFAULT_BRANCH,
     headRepository: { nameWithOwner: REPOSITORY.full_name },
-    timelineItems: { totalCount: 0 },
+    timelineItems: { nodes: [], pageInfo: { hasNextPage: false } },
     ...overrides,
   });
 
@@ -695,6 +695,64 @@ describe('authorizeProfileReceipt trusted caller events', () => {
     assert.deepEqual(store.graphqlCalls[0].variables, { owner: OWNER, name: REPO, head: 'topic' });
     assert.match(store.graphqlCalls[0].query, /BASE_REF_CHANGED_EVENT/);
     assert.match(store.graphqlCalls[0].query, /AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT/);
+    assert.match(store.graphqlCalls[0].query, /nodes \{ __typename \} pageInfo \{ hasNextPage \}/);
+  });
+
+  it('ignores unfiltered timeline totals when the filtered connection is empty and complete', async () => {
+    const { github, store } = buildStore({
+      reviewRunOverrides: target,
+      reviewRuns: [reviewRun(target)],
+      targetPulls: [targetPull({
+        timelineItems: { totalCount: 17, nodes: [], pageInfo: { hasNextPage: false } },
+      })],
+    });
+    const result = await authorizeProfileReceipt(github, authorizeContext(store));
+    assert.equal(result.authorized, true, result.reason);
+  });
+
+  it('rejects manual and automatic base changes even if the timeline total is zero', async () => {
+    for (const __typename of ['BaseRefChangedEvent', 'AutomaticBaseChangeSucceededEvent']) {
+      const { github, store } = buildStore({
+        reviewRunOverrides: target,
+        reviewRuns: [reviewRun(target)],
+        targetPulls: [targetPull({
+          timelineItems: { totalCount: 0, nodes: [{ __typename }], pageInfo: { hasNextPage: false } },
+        })],
+      });
+      const result = await authorizeProfileReceipt(github, authorizeContext(store));
+      assert.equal(result.authorized, false);
+      assert.match(result.reason, /changed base/);
+    }
+  });
+
+  it('rejects missing, malformed or incomplete filtered timeline connections', async () => {
+    for (const timelineItems of [
+      undefined,
+      null,
+      [],
+      {},
+      { totalCount: 0 },
+      { nodes: null, pageInfo: { hasNextPage: false } },
+      { nodes: {}, pageInfo: { hasNextPage: false } },
+      { nodes: [], pageInfo: null },
+      { nodes: [], pageInfo: {} },
+      { nodes: [], pageInfo: { hasNextPage: true } },
+      { nodes: [], pageInfo: { hasNextPage: null } },
+      { nodes: [], pageInfo: { hasNextPage: 0 } },
+      { nodes: [], pageInfo: { hasNextPage: 'false' } },
+      { nodes: [null], pageInfo: { hasNextPage: false } },
+      { nodes: [{}], pageInfo: { hasNextPage: false } },
+      { nodes: [{ __typename: 'IssueComment' }], pageInfo: { hasNextPage: false } },
+    ]) {
+      const { github, store } = buildStore({
+        reviewRunOverrides: target,
+        reviewRuns: [reviewRun(target)],
+        targetPulls: [targetPull({ timelineItems })],
+      });
+      const result = await authorizeProfileReceipt(github, authorizeContext(store));
+      assert.equal(result.authorized, false, JSON.stringify(timelineItems));
+      assert.match(result.reason, /head branch/);
+    }
   });
 
   it('ignores fork PRs that share the head branch name', async () => {
@@ -713,7 +771,6 @@ describe('authorizeProfileReceipt trusted caller events', () => {
 
   it('rejects retargeted, non-default, unbounded or missing head-branch PRs', async () => {
     for (const options of [
-      { targetPulls: [targetPull({ timelineItems: { totalCount: 1 } })] },
       { targetPulls: [targetPull({ baseRefName: 'release' })] },
       { targetPulls: [targetPull(), targetPull({ number: 8, baseRefName: 'release' })] },
       { targetPulls: [] },

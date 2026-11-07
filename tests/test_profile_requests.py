@@ -377,7 +377,7 @@ class RequestHistoryTests(unittest.TestCase):
                     "number": PR,
                     "baseRefName": base,
                     "headRepository": {"nameWithOwner": REPO},
-                    "timelineItems": {"totalCount": 0},
+                    "timelineItems": {"nodes": [], "pageInfo": {"hasNextPage": False}},
                 }
                 return response(
                     {"data": {"repository": {"pullRequests": {"totalCount": 1, "nodes": [node]}}}}

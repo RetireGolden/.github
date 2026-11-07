@@ -69,7 +69,8 @@ const HEAD_PULLS_QUERY =
   ' repository(owner: $owner, name: $name) {' +
   ` pullRequests(headRefName: $head, first: ${MAX_HEAD_PULL_REQUESTS}, states: [OPEN, CLOSED, MERGED]) {` +
   ' totalCount nodes { number baseRefName headRepository { nameWithOwner }' +
-  ' timelineItems(itemTypes: [BASE_REF_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT], first: 1) { totalCount } } } } }';
+  ' timelineItems(itemTypes: [BASE_REF_CHANGED_EVENT, AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT], first: 1) {' +
+  ' nodes { __typename } pageInfo { hasNextPage } } } } } }';
 const BRANCH_RE = /^[^\x00-\x1f\x7f ~^:?*\[\\]{1,255}$/;
 
 function unauthorized(reason) {
@@ -237,11 +238,18 @@ export async function verifyTargetBase(github, { owner, repo, repository, defaul
     if (node.headRepository?.nameWithOwner !== repository.full_name) {
       continue;
     }
-    const changed = node.timelineItems?.totalCount;
-    if (!Number.isInteger(node.number) || node.number <= 0 || !Number.isInteger(changed)) {
+    // GitHub's timeline totalCount includes items outside the itemTypes filter.
+    // Only an empty, complete filtered connection proves no base change.
+    const changes = node.timelineItems?.nodes;
+    if (
+      !Number.isInteger(node.number) ||
+      node.number <= 0 ||
+      !Array.isArray(changes) ||
+      node.timelineItems?.pageInfo?.hasNextPage !== false
+    ) {
       throw new Error('head branch pull request entry is invalid');
     }
-    if (node.baseRefName !== defaultBranch || changed !== 0) {
+    if (node.baseRefName !== defaultBranch || changes.length !== 0) {
       throw new Error('pull_request_target head branch has a non-default or changed base');
     }
     numbers.push(node.number);

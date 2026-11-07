@@ -458,12 +458,12 @@ def head_pulls(*nodes, total=None):
     }
 
 
-def head_pull(number=7, base="main", owner="RetireGolden/example", changes=0):
+def head_pull(number=7, base="main", owner="RetireGolden/example"):
     return {
         "number": number,
         "baseRefName": base,
         "headRepository": None if owner is None else {"nameWithOwner": owner},
-        "timelineItems": {"totalCount": changes},
+        "timelineItems": {"nodes": [], "pageInfo": {"hasNextPage": False}},
     }
 
 
@@ -506,6 +506,7 @@ class TrustedCallerEventTests(unittest.TestCase):
                 self.assertIn("headRefName: $head", payload["query"])
                 self.assertIn("BASE_REF_CHANGED_EVENT", payload["query"])
                 self.assertIn("AUTOMATIC_BASE_CHANGE_SUCCEEDED_EVENT", payload["query"])
+                self.assertIn("nodes { __typename } pageInfo { hasNextPage }", payload["query"])
                 self.assertEqual(
                     payload["variables"],
                     {"owner": "RetireGolden", "name": "example", "head": "topic"},
@@ -539,10 +540,54 @@ class TrustedCallerEventTests(unittest.TestCase):
         )
         self.assertEqual(client.verify_target_base("topic"), (7,))
 
+    def test_pull_request_target_ignores_unfiltered_timeline_total(self):
+        node = head_pull()
+        node["timelineItems"]["totalCount"] = 17
+        client = self.client(head_pulls(node))
+        self.assertEqual(client.verify_target_base("topic"), (7,))
+
+    def test_pull_request_target_rejects_manual_and_automatic_base_changes(self):
+        for typename in ("BaseRefChangedEvent", "AutomaticBaseChangeSucceededEvent"):
+            with self.subTest(typename=typename):
+                node = head_pull()
+                node["timelineItems"] = {
+                    "totalCount": 0,
+                    "nodes": [{"__typename": typename}],
+                    "pageInfo": {"hasNextPage": False},
+                }
+                with self.assertRaisesRegex(ProfileGitHubError, "changed base"):
+                    self.client(head_pulls(node)).verify_target_base("topic")
+
+    def test_pull_request_target_rejects_invalid_filtered_timeline_connections(self):
+        for timeline in (
+            None,
+            [],
+            {},
+            {"totalCount": 0},
+            {"nodes": None, "pageInfo": {"hasNextPage": False}},
+            {"nodes": {}, "pageInfo": {"hasNextPage": False}},
+            {"nodes": [], "pageInfo": None},
+            {"nodes": [], "pageInfo": {}},
+            {"nodes": [], "pageInfo": {"hasNextPage": True}},
+            {"nodes": [], "pageInfo": {"hasNextPage": None}},
+            {"nodes": [], "pageInfo": {"hasNextPage": 0}},
+            {"nodes": [], "pageInfo": {"hasNextPage": "false"}},
+            {"nodes": [None], "pageInfo": {"hasNextPage": False}},
+            {"nodes": [{}], "pageInfo": {"hasNextPage": False}},
+            {"nodes": [{"__typename": "IssueComment"}], "pageInfo": {"hasNextPage": False}},
+        ):
+            with self.subTest(timeline=timeline):
+                node = {**head_pull(), "timelineItems": timeline}
+                with self.assertRaises(ProfileGitHubError):
+                    self.client(head_pulls(node)).verify_target_base("topic")
+        node = head_pull()
+        del node["timelineItems"]
+        with self.assertRaises(ProfileGitHubError):
+            self.client(head_pulls(node)).verify_target_base("topic")
+
     def test_pull_request_target_rejects_retargeted_or_non_default_bases(self):
         for graphql in (
             head_pulls(head_pull(base="release")),
-            head_pulls(head_pull(changes=1)),
             head_pulls(head_pull(), head_pull(8, base="release")),
             head_pulls(head_pull(owner="fork/example")),
             head_pulls(),
@@ -552,7 +597,7 @@ class TrustedCallerEventTests(unittest.TestCase):
             {"data": {"repository": None}},
             head_pulls({"number": True, "baseRefName": "main",
                         "headRepository": {"nameWithOwner": "RetireGolden/example"},
-                        "timelineItems": {"totalCount": 0}}),
+                        "timelineItems": {"nodes": [], "pageInfo": {"hasNextPage": False}}}),
             head_pulls({**head_pull(), "timelineItems": None}),
         ):
             with self.subTest(graphql=graphql):

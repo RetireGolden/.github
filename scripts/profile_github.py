@@ -41,7 +41,8 @@ _HEAD_PULLS_QUERY = (
     " repository(owner: $owner, name: $name) {"
     " pullRequests(headRefName: $head, first: %d, states: [OPEN, CLOSED, MERGED]) {"
     " totalCount nodes { number baseRefName headRepository { nameWithOwner }"
-    " timelineItems(itemTypes: [%s], first: 1) { totalCount } } } } }"
+    " timelineItems(itemTypes: [%s], first: 1) {"
+    " nodes { __typename } pageInfo { hasNextPage } } } } } }"
 ) % (MAX_HEAD_PULL_REQUESTS, _BASE_CHANGE_ITEMS)
 
 
@@ -568,16 +569,20 @@ class ProfileGitHub:
                 continue  # Fork runs are rejected by head_repository; forks cannot retarget ours.
             number = node.get("number")
             changes = node.get("timelineItems")
-            changed = changes.get("totalCount") if isinstance(changes, Mapping) else None
+            # GitHub's timeline totalCount includes items outside the itemTypes filter.
+            # Only an empty, complete filtered connection proves no base change.
+            events = changes.get("nodes") if isinstance(changes, Mapping) else None
+            page = changes.get("pageInfo") if isinstance(changes, Mapping) else None
             if (
                 not isinstance(number, int)
                 or isinstance(number, bool)
                 or number <= 0
-                or not isinstance(changed, int)
-                or isinstance(changed, bool)
+                or not isinstance(events, list)
+                or not isinstance(page, Mapping)
+                or page.get("hasNextPage") is not False
             ):
                 raise ProfileGitHubError("head branch pull request entry is invalid")
-            if node.get("baseRefName") != self.config.default_branch or changed != 0:
+            if node.get("baseRefName") != self.config.default_branch or events:
                 raise ProfileGitHubError(
                     "pull_request_target head branch has a non-default or changed base"
                 )
