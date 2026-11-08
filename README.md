@@ -31,7 +31,7 @@ added in a PR becomes authoritative only after it merges.
 
 Use concise prose to describe repository contracts, with nested files for
 component-specific invariants. See the action's
-[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/212775ffea22e806cddcb706c73a3df26fbcb6d0/docs/review-policy.md).
+[file format, offline lint/explain commands, and trust rules](https://github.com/FlyOverCoderKY/openrouter-pr-review-action/blob/0d6a05e41616281368c1f6bb7fb5a47ddf41375d/docs/review-policy.md).
 In this guidance rollout, `profile: code` and `profile: docs` are descriptive;
 they do not select models by themselves.
 
@@ -63,7 +63,7 @@ all current caller, pin, receipt, and proof checks.
 
 | Profile | Standard (auto) | Deep (maintainer dispatch) |
 | --- | --- | --- |
-| `code` | Sol/Azure required, GLM optional | Sol/Azure required, GLM optional, Astra/Flex required |
+| `code` | Sol 6.1/Azure US ZDR required, GLM optional | Sol 6.1/Azure US ZDR required, GLM optional, Astra/Flex required |
 | `docs` | GLM required | GLM required, Astra/Flex required |
 
 Both levels retain the existing 1,080-second lane ceiling and 1,320-second job
@@ -82,7 +82,9 @@ DNS stalls and endless responses bounded. Failed-lane/checkpoint diagnostics
 distinguish connection setup, socket inactivity, and elapsed deadline expiry.
 
 `review-model-routes.json` supplies provider routing for exact lane slugs (for
-example Astra via `openai/flex` and Sol pinned to `azure`). Deep raises the minimum panel; it retains
+example Astra via `openai/flex` and Sol 6.1 pinned to `azure/us` with data
+collection denied, ZDR required, and provider fallbacks disabled). Deep raises
+the minimum panel; it retains
 the finding ledger and continues a full-PR review. There is no automatic risk
 classifier yet — deep is requested explicitly.
 
@@ -345,7 +347,7 @@ Local workflow contract checks:
 ```sh
 # Obtain the pinned public action contracts outside product source.
 git clone --no-checkout https://github.com/FlyOverCoderKY/openrouter-pr-review-action .trusted-review-action
-git -C .trusted-review-action checkout 212775ffea22e806cddcb706c73a3df26fbcb6d0
+git -C .trusted-review-action checkout 0d6a05e41616281368c1f6bb7fb5a47ddf41375d
 export PYTHONPATH="$PWD/.trusted-review-action/src"
 uv run --with jq --with pyyaml python -m unittest discover -s tests
 node --test tests/profile-consumer.test.mjs tests/workflow-wakeup.test.mjs tests/gate-check.test.mjs

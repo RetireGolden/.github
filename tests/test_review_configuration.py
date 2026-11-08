@@ -17,14 +17,14 @@ WORKFLOW = yaml.load(
 )
 JOBS = WORKFLOW['jobs']
 CONFIG = JOBS['review-config']
-ACTION_PIN = '212775ffea22e806cddcb706c73a3df26fbcb6d0'
+ACTION_PIN = '0d6a05e41616281368c1f6bb7fb5a47ddf41375d'
 SCRIPT = next(step['run'] for step in CONFIG['steps'] if step.get('id') == 'config')
 REGISTRY = json.dumps(
     json.loads((ROOT / 'review-profiles.json').read_text(encoding='utf-8')),
     separators=(',', ':'),
 )
 SOL_ROUTE = json.dumps(
-    {'openai/gpt-6-sol': json.loads((ROOT / 'review-model-routes.json').read_text(encoding='utf-8'))['openai/gpt-6-sol']},
+    {'openai/gpt-6.1-sol': json.loads((ROOT / 'review-model-routes.json').read_text(encoding='utf-8'))['openai/gpt-6.1-sol']},
     separators=(',', ':'),
 )
 ROUTES = json.dumps(
@@ -34,6 +34,27 @@ ROUTES = json.dumps(
 
 
 class ReviewConfigurationTests(unittest.TestCase):
+    def test_sol_route_matches_tested_policy_without_changing_secondary_routes(self):
+        from or_pr_review.models import (
+            base_chat_payload,
+            parse_model_routes,
+            review_lane_defaults,
+        )
+
+        model = 'openai/gpt-6.1-sol'
+        routes = parse_model_routes(ROUTES)
+        kwargs = review_lane_defaults(model)
+        kwargs.update(routes[model])
+        payload, _ = base_chat_payload(model=model, response_schema={'name': 'review'}, **kwargs)
+        self.assertEqual(payload['provider'], {
+            'order': ['azure/us'], 'allow_fallbacks': False,
+            'data_collection': 'deny', 'zdr': True,
+        })
+        self.assertEqual(routes['openai/gpt-6-astra'], {
+            'provider_order': ['openai/flex'], 'service_tier': 'flex',
+        })
+        self.assertNotIn('z-ai/glm-5.3-flash', routes)
+
     def run_config(self, repository, mode='off', *, follow_up=False, profiles=False):
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / 'output'
@@ -57,13 +78,13 @@ class ReviewConfigurationTests(unittest.TestCase):
 
     def test_standing_rosters_and_follow_up_effort_are_preserved(self):
         cases = [
-            ('RetireGolden', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'high'),
-            ('RetireGolden-Pro', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'high'),
-            ('RetireGolden-MCP', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'high'),
+            ('RetireGolden', 'openai/gpt-6.1-sol,z-ai/glm-5.3-flash', 'high'),
+            ('RetireGolden-Pro', 'openai/gpt-6.1-sol,z-ai/glm-5.3-flash', 'high'),
+            ('RetireGolden-MCP', 'openai/gpt-6.1-sol,z-ai/glm-5.3-flash', 'high'),
             ('RetireGolden-Docs', 'z-ai/glm-5.3-flash', 'medium'),
-            ('retiregolden.org', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'high'),
-            ('RetireBench', 'openai/gpt-6-sol,z-ai/glm-5.3-flash', 'medium'),
-            ('unlisted', 'openai/gpt-6-sol', 'low'),
+            ('retiregolden.org', 'openai/gpt-6.1-sol,z-ai/glm-5.3-flash', 'high'),
+            ('RetireBench', 'openai/gpt-6.1-sol,z-ai/glm-5.3-flash', 'medium'),
+            ('unlisted', 'openai/gpt-6.1-sol', 'low'),
         ]
         for name, models, effort in cases:
             with self.subTest(repository=name):
@@ -72,7 +93,7 @@ class ReviewConfigurationTests(unittest.TestCase):
                 self.assertIn('models=' + models + '\n', output)
                 self.assertIn('effort=' + effort + '\n', output)
                 self.assertEqual(output.count('Pin-bump PRs:'), 1)
-                routes = SOL_ROUTE if 'openai/gpt-6-sol' in models else '{}'
+                routes = SOL_ROUTE if 'openai/gpt-6.1-sol' in models else '{}'
                 self.assertIn('model_routes=' + routes + '\n', output)
                 self.assertNotIn('astra', output.lower())
         proc, output = self.run_config('RetireGolden/RetireGolden', follow_up=True)

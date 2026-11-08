@@ -6,7 +6,7 @@
         "lanes": [
           {
             "required": true,
-            "model": "openai/gpt-6-sol"
+            "model": "openai/gpt-6.1-sol"
           },
           {
             "required": false,
@@ -25,7 +25,7 @@
         "lanes": [
           {
             "required": true,
-            "model": "openai/gpt-6-sol"
+            "model": "openai/gpt-6.1-sol"
           },
           {
             "required": false,
