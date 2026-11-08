@@ -351,27 +351,27 @@ jobs:
           # This configuration is part of the pinned reusable workflow, never PR code.
           policies = {
               "RetireGolden/RetireGolden": {
-                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6.1-sol,z-ai/glm-5.3-flash",
                   "effort": "high",
                   "guidance": ""
               },
               "RetireGolden/RetireGolden-MCP": {
-                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6.1-sol,z-ai/glm-5.3-flash",
                   "effort": "high",
                   "guidance": ""
               },
               "RetireGolden/retiregolden.org": {
-                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6.1-sol,z-ai/glm-5.3-flash",
                   "effort": "high",
                   "guidance": "Run a full review, with particular attention to calculation correctness, public contracts, security, and release integrity. Obey AGENTS.md."
               },
               "RetireGolden/RetireGolden-Pro": {
-                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6.1-sol,z-ai/glm-5.3-flash",
                   "effort": "high",
                   "guidance": ""
               },
               "RetireGolden/RetireBench": {
-                  "models": "openai/gpt-6-sol,z-ai/glm-5.3-flash",
+                  "models": "openai/gpt-6.1-sol,z-ai/glm-5.3-flash",
                   "effort": "medium",
                   "guidance": "Major issues and security only. This is not a full AGENTS.md audit."
               },
@@ -381,7 +381,7 @@ jobs:
                   "guidance": ""
               },
               "*": {
-                  "models": "openai/gpt-6-sol",
+                  "models": "openai/gpt-6.1-sol",
                   "effort": "low",
                   "guidance": "This repository is not on the HIGH or MEDIUM review list. Do not run a high-effort or full AGENTS.md audit. Flag only obvious defects and security issues."
               }
@@ -390,7 +390,7 @@ jobs:
           policy = policies.get(os.environ["GITHUB_REPOSITORY"], policies["*"])
           # Legacy (non-profile) callers get the same pinned route for their roster;
           # tests keep this in step with review-model-routes.json.
-          legacy_routes = {"openai/gpt-6-sol": {"provider": "azure"}}
+          legacy_routes = {"openai/gpt-6.1-sol": {"provider": "azure/us"}}
           roster = policy["models"].split(",")
           registry = ""
           routes = json.dumps({m: r for m, r in legacy_routes.items() if m in roster}, separators=(",", ":"))
@@ -523,7 +523,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 212775ffea22e806cddcb706c73a3df26fbcb6d0
+          ref: 0d6a05e41616281368c1f6bb7fb5a47ddf41375d
           path: .trusted-review-action
           persist-credentials: false
       - name: Resolve pending review request
@@ -542,7 +542,7 @@ jobs:
       - name: Prepare shared review snapshot
         id: profile_setup
         if: inputs.review_profiles_enabled
-        uses: FlyOverCoderKY/openrouter-pr-review-action@212775ffea22e806cddcb706c73a3df26fbcb6d0 # action#41 rebase scope and review history
+        uses: FlyOverCoderKY/openrouter-pr-review-action@0d6a05e41616281368c1f6bb7fb5a47ddf41375d # action#47 Sol Azure US ZDR
         with:
           role: setup
           github_token: ${{ github.token }}
@@ -591,7 +591,7 @@ jobs:
         id: openrouter_first
         if: steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@212775ffea22e806cddcb706c73a3df26fbcb6d0 # action#41 rebase scope and review history
+        uses: FlyOverCoderKY/openrouter-pr-review-action@0d6a05e41616281368c1f6bb7fb5a47ddf41375d # action#47 Sol Azure US ZDR
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
@@ -1021,7 +1021,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FlyOverCoderKY/openrouter-pr-review-action
-          ref: 212775ffea22e806cddcb706c73a3df26fbcb6d0
+          ref: 0d6a05e41616281368c1f6bb7fb5a47ddf41375d
           path: .trusted-review-action
           persist-credentials: false
       - name: Resolve pending review request
@@ -1040,7 +1040,7 @@ jobs:
       - name: Prepare shared review snapshot
         id: profile_setup
         if: inputs.review_profiles_enabled && steps.seeded.outputs.ready == 'true'
-        uses: FlyOverCoderKY/openrouter-pr-review-action@212775ffea22e806cddcb706c73a3df26fbcb6d0 # action#41 rebase scope and review history
+        uses: FlyOverCoderKY/openrouter-pr-review-action@0d6a05e41616281368c1f6bb7fb5a47ddf41375d # action#47 Sol Azure US ZDR
         with:
           role: setup
           github_token: ${{ github.token }}
@@ -1088,7 +1088,7 @@ jobs:
         id: openrouter_followup
         if: steps.seeded.outputs.ready == 'true' && steps.profile_request.outputs.skip_review != 'true'
         timeout-minutes: 25
-        uses: FlyOverCoderKY/openrouter-pr-review-action@212775ffea22e806cddcb706c73a3df26fbcb6d0 # action#41 rebase scope and review history
+        uses: FlyOverCoderKY/openrouter-pr-review-action@0d6a05e41616281368c1f6bb7fb5a47ddf41375d # action#47 Sol Azure US ZDR
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         with:
